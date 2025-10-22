@@ -11,7 +11,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        parse_env_var="_parse_env_var",
+    )
 
     database_url: str = Field(
         "postgresql+psycopg2://price_user:price_pass@db:5432/price_monitor",
@@ -79,6 +84,31 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @classmethod
+    def _parse_env_var(cls, field_name: str, raw_value: str) -> object:
+        """Custom environment variable parsing.
+
+        Pydantic expects list-typed fields to be provided as JSON strings when
+        loading from environment variables. Our deployment uses simple comma
+        separated values (and sometimes leaves the value empty), which caused
+        ``json.loads`` to fail before our validators could normalize the data.
+
+        This hook converts the raw environment values into Python lists so that
+        Pydantic can successfully coerce them into the desired field types.
+        """
+
+        if field_name == "default_price_types":
+            if not raw_value.strip():
+                return []
+            return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+        if field_name == "telegram_admin_ids":
+            if not raw_value.strip():
+                return []
+            return [int(item.strip()) for item in raw_value.split(",") if item.strip()]
+
+        return raw_value
 
 
 @lru_cache(maxsize=1)
