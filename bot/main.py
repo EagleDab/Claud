@@ -42,6 +42,7 @@ class MessageEditor(Protocol):
         self, text: str, *args, **kwargs
     ) -> Awaitable[Message | bool]:
         """Edit message content within Telegram."""
+        ...
 
 
 def _require_message(update: Update) -> Message | None:
