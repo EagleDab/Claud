@@ -1,0 +1,57 @@
+# Секреты
+.env
+.env.local
+.env.production
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv
+venv/
+env/
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Логи
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# База данных
+*.sql
+*.dump
+pgdata/
+
+# Playwright
+.cache/
+.playwright/
+screenshots/
+videos/
+
+# Временные файлы
+tmp/
+temp/
+*.tmp
+*.bak
