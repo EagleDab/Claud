@@ -23,7 +23,7 @@ class ScraperError(RuntimeError):
     """Raised when scraping fails."""
 
 
-@dataclass(slots=True)
+@dataclass
 class ProductSnapshot:
     """Normalized representation of a product returned by an adapter."""
 
