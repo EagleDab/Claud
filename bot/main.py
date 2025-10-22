@@ -1,7 +1,9 @@
 """Entry point for the Telegram bot."""
 from __future__ import annotations
 
+import asyncio
 import logging
+from textwrap import dedent
 from typing import Awaitable, Dict, Iterable, List, Protocol, Sequence, Tuple, cast
 from urllib.parse import urljoin, urlparse
 
@@ -17,6 +19,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from db import (
@@ -30,6 +34,7 @@ from db import (
     session_scope,
 )
 from db.session import init_database
+from msklad import MoySkladClient, MoySkladError
 from pricing.config import settings
 from pricing.service import PriceMonitorService
 from scraper import ScraperService
@@ -58,6 +63,53 @@ SUPPORTED_SITES: Dict[str, str] = {
     "mk4s.ru": "mk4s",
     "www.mk4s.ru": "mk4s",
 }
+
+
+PRICE_RULES_HELP = dedent(
+    """
+    Правила изменения цены:
+    • «<тип>=10%» — увеличить цену на указанный процент.
+    • «<тип>=-500» — уменьшить цену на фиксированную сумму.
+    • «<тип>==» — установить цену, равную цене конкурента.
+    Несколько правил можно передать через точку с запятой или отдельными аргументами.
+    """
+).strip()
+
+
+USAGE_HELP = dedent(
+    """
+    Как добавить товар:
+    1. Отправьте команду /add_product <url> <код> [<тип=правило> ...]
+       или сообщение вида <url>;<код>;<тип=правило>[;...].
+    2. Название типа цены должно совпадать с МойСклад. Список доступных типов — /price_types.
+    3. Примеры:
+       • https://example.ru/item;ABC123;Цена продажи=10%;Цена для интернет магазина==
+       • /add_product https://example.ru/item ABC123 Цена_для_интернет_магазина==-500
+    """
+).strip()
+
+
+PRICE_TYPES_CACHE: List[str] | None = None
+
+
+async def get_price_type_names(force_refresh: bool = False) -> List[str]:
+    """Return cached list of MoySklad price type names."""
+
+    global PRICE_TYPES_CACHE
+    if PRICE_TYPES_CACHE is not None and not force_refresh:
+        return PRICE_TYPES_CACHE
+
+    client = MoySkladClient()
+
+    try:
+        mapping = await asyncio.to_thread(client.get_price_type_mapping)
+    except MoySkladError:  # pragma: no cover - network failure guard
+        LOGGER.exception("Failed to load price types")
+        PRICE_TYPES_CACHE = []
+        return PRICE_TYPES_CACHE
+
+    PRICE_TYPES_CACHE = sorted(mapping.keys())
+    return PRICE_TYPES_CACHE
 
 
 
@@ -107,13 +159,106 @@ def parse_rules(arguments: Iterable[str]) -> List[PricingRule]:
     return rules
 
 
+def parse_inline_product_payload(text: str) -> Tuple[str, str, List[str]]:
+    """Parse ``<url>;<code>;<rule>...`` payloads from plain text messages."""
+
+    if ";" not in text:
+        raise ValueError("Message does not look like a product payload")
+
+    parts = [segment.strip() for segment in text.split(";")]
+    parts = [segment for segment in parts if segment]
+    if len(parts) < 2:
+        raise ValueError("Сообщение должно содержать ссылку и код через ';'")
+
+    url, code = parts[0], parts[1]
+    rule_args = parts[2:]
+    return url, code, rule_args
+
+
+def _unique_preserve_order(items: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def describe_rule(rule: PricingRule) -> str:
+    """Return a human friendly rule description."""
+
+    if rule.rule_type == RuleType.PERCENT_MARKUP:
+        return f"{rule.price_type}: +{rule.value:g}%"
+    if rule.rule_type == RuleType.MINUS_FIXED:
+        return f"{rule.price_type}: -{rule.value:g}"
+    if rule.rule_type == RuleType.EQUAL:
+        return f"{rule.price_type}: = цене конкурента"
+    return f"{rule.price_type}: неизвестное правило"
+
+
+def build_product_added_message(
+    product_id: int, price_types: Iterable[str], rules: Sequence[PricingRule]
+) -> str:
+    """Compose a human readable confirmation message."""
+
+    price_types_list = list(price_types)
+    lines = [f"Товар добавлен с id={product_id}."]
+    if price_types_list:
+        lines.append("Типы цен для синхронизации: " + ", ".join(price_types_list))
+    if rules:
+        lines.append("Активные правила:")
+        lines.extend(f"• {describe_rule(rule)}" for rule in rules)
+    else:
+        lines.append("Правила не заданы — цены будут скопированы для указанных типов.")
+    lines.append("Команды для изменений: /set_rules и /set_price_types.")
+    return "\n".join(lines)
+
+
+async def create_product_record(
+    url: str, code: str, rules: List[PricingRule]
+) -> Tuple[int, List[str]]:
+    """Persist a product with optional pricing rules and return metadata."""
+
+    price_types = _unique_preserve_order(rule.price_type for rule in rules)
+    if not price_types:
+        loaded = await get_price_type_names()
+        price_types = loaded or settings.default_price_types or ["Цена продажи"]
+
+    with session_scope() as session:
+        site = ensure_site(session, url)
+        product = Product(site=site, competitor_url=url)
+        session.add(product)
+        session.flush()
+
+        for rule in rules:
+            rule.product_id = product.id
+            session.add(rule)
+
+        link = MSkladLink(product_id=product.id, msklad_code=code, price_types=price_types)
+        session.add(link)
+        session.flush()
+        product_id = product.id
+
+    return product_id, price_types
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = _require_message(update)
     if message is None:
         return
     await message.reply_text(
-        "Добро пожаловать! Используйте /add_product <url> <код> <тип=правило>..."
+        "Добро пожаловать!\n"
+        f"{USAGE_HELP}\n\n"
+        f"{PRICE_RULES_HELP}"
     )
+
+
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = _require_message(update)
+    if message is None:
+        return
+    await message.reply_text(f"{USAGE_HELP}\n\n{PRICE_RULES_HELP}")
 
 
 async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -124,6 +269,7 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if len(args) < 2:
         await message.reply_text(
             "Использование: /add_product <url> <код МойСклад> [<тип=правило> ...]"
+            f"\n\n{USAGE_HELP}\n\n{PRICE_RULES_HELP}"
         )
         return
 
@@ -131,26 +277,19 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     code = args[1]
     rule_args = args[2:]
     try:
-        with session_scope() as session:
-            site = ensure_site(session, url)
-            product = Product(site=site, competitor_url=url)
-            session.add(product)
-            session.flush()
+        rules = parse_rules(rule_args) if rule_args else []
+    except ValueError as exc:
+        await message.reply_text(f"Ошибка: {exc}\n\n{PRICE_RULES_HELP}")
+        return
 
-            rules = parse_rules(rule_args) if rule_args else []
-            for rule in rules:
-                rule.product_id = product.id
-                session.add(rule)
-
-            price_types = [rule.price_type for rule in rules] or settings.default_price_types
-            link = MSkladLink(product_id=product.id, msklad_code=code, price_types=price_types)
-            session.add(link)
-            session.flush()
-            product_id = product.id
-        await message.reply_text(f"Товар добавлен с id={product_id}")
+    try:
+        product_id, price_types = await create_product_record(url, code, rules)
     except Exception as exc:  # pragma: no cover - runtime validation
         LOGGER.exception("Failed to add product")
         await message.reply_text(f"Ошибка: {exc}")
+        return
+
+    await message.reply_text(build_product_added_message(product_id, price_types, rules))
 
 
 async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -274,6 +413,50 @@ async def set_price_types(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await message.reply_text("Типы цен обновлены")
 
 
+async def price_types(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = _require_message(update)
+    if message is None:
+        return
+
+    force_refresh = bool(context.args and context.args[0].lower() in {"refresh", "update"})
+    names = await get_price_type_names(force_refresh=force_refresh)
+    if not names:
+        await message.reply_text("Не удалось получить список типов цен. Попробуйте позже.")
+        return
+
+    lines = ["Доступные типы цен МойСклад:"]
+    lines.extend(f"• {name}" for name in names)
+    if not force_refresh:
+        lines.append("(Добавьте 'refresh' к команде для обновления списка из МойСклад.)")
+    await message.reply_text("\n".join(lines))
+
+
+async def handle_inline_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = _require_message(update)
+    if message is None:
+        return
+    text = message.text or ""
+    try:
+        url, code, rule_args = parse_inline_product_payload(text)
+    except ValueError:
+        return
+
+    try:
+        rules = parse_rules(rule_args) if rule_args else []
+    except ValueError as exc:
+        await message.reply_text(f"Ошибка: {exc}\n\n{PRICE_RULES_HELP}")
+        return
+
+    try:
+        product_id, price_types = await create_product_record(url, code, rules)
+    except Exception as exc:  # pragma: no cover - runtime validation
+        LOGGER.exception("Failed to add product from inline message")
+        await message.reply_text(f"Ошибка: {exc}")
+        return
+
+    await message.reply_text(build_product_added_message(product_id, price_types, rules))
+
+
 async def list_items(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = _require_message(update)
     if message is None:
@@ -391,15 +574,18 @@ def main() -> None:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", show_help))
     application.add_handler(CommandHandler("add_product", add_product))
     application.add_handler(CommandHandler("add_category", add_category))
     application.add_handler(CommandHandler("set_rules", set_rules))
     application.add_handler(CommandHandler("set_price_types", set_price_types))
+    application.add_handler(CommandHandler("price_types", price_types))
     application.add_handler(CommandHandler("list", list_items))
     application.add_handler(CommandHandler("test_notify", test_notify))
     application.add_handler(CommandHandler("recheck", recheck))
     application.add_handler(CommandHandler("delete", delete))
     application.add_handler(CallbackQueryHandler(callback_router))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inline_product))
 
     LOGGER.info("Starting bot polling")
     application.run_polling()
