@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import List, Optional
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     msklad_password: Optional[str] = Field(None, description="Password for MoySklad API authentication.")
     msklad_token: Optional[str] = Field(None, description="API token for MoySklad if basic auth is not used.")
     msklad_account_url: AnyHttpUrl = Field(
-        "https://online.moysklad.ru/api/remap/1.2",
+        "https://api.moysklad.ru/api/remap/1.2",
         description="Base URL of the MoySklad API.",
     )
 
@@ -83,6 +84,18 @@ class Settings(BaseSettings):
     def _parse_price_types(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("msklad_account_url", mode="before")
+    @classmethod
+    def _normalise_msklad_url(cls, value: object) -> object:
+        """Migrate deprecated MoySklad hosts to the supported endpoint."""
+
+        if isinstance(value, str):
+            parsed = urlparse(value)
+            if parsed.netloc == "online.moysklad.ru":
+                parsed = parsed._replace(netloc="api.moysklad.ru")
+                return urlunparse(parsed)
         return value
 
     @classmethod
