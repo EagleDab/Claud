@@ -125,20 +125,95 @@ class BaseParser:
     def parse_json_from_scripts(self, soup: BeautifulSoup, keys: Iterable[str]) -> Dict[str, Any]:
         """Extract JSON data from script tags containing specified keys."""
 
-        pattern = re.compile(r"({.+})", re.S)
         for script in soup.find_all("script"):
             text = script.string or script.text
             if not text:
                 continue
             if not any(key in text for key in keys):
                 continue
-            match = pattern.search(text)
-            if match:
-                try:
-                    return json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    continue
+            for candidate in self._extract_json_candidates(text):
+                for data in self._try_load_json(candidate):
+                    if any(self._json_contains_key(data, key) for key in keys):
+                        return data
         return {}
+
+    def _extract_json_candidates(self, text: str) -> List[str]:
+        """Return possible JSON snippets embedded in arbitrary script text."""
+
+        results: List[str] = []
+        stack: List[str] = []
+        start_index: Optional[int] = None
+        in_string = False
+        escape = False
+        string_char = ""
+
+        for index, char in enumerate(text):
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == string_char:
+                    in_string = False
+                continue
+
+            if char in ('"', "'"):
+                in_string = True
+                string_char = char
+                continue
+
+            if char in "{[":
+                if not stack:
+                    start_index = index
+                stack.append("}" if char == "{" else "]")
+                continue
+
+            if char in "}]":
+                if stack and char == stack[-1]:
+                    stack.pop()
+                    if not stack and start_index is not None:
+                        results.append(text[start_index : index + 1])
+                        start_index = None
+                else:
+                    stack.clear()
+                    start_index = None
+                continue
+
+        return results
+
+    def _try_load_json(self, candidate: str) -> List[Dict[str, Any]]:
+        """Attempt to load JSON ensuring dictionary candidates."""
+
+        candidate = candidate.strip()
+        if candidate.endswith(";"):
+            candidate = candidate[:-1]
+
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            return []
+
+        if isinstance(parsed, dict):
+            return [parsed]
+
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+
+        return []
+
+    def _json_contains_key(self, data: Dict[str, Any], target: str) -> bool:
+        """Check recursively whether a key is present in a JSON-like structure."""
+
+        def _walk(value: Any) -> bool:
+            if isinstance(value, dict):
+                if target in value:
+                    return True
+                return any(_walk(v) for v in value.values())
+            if isinstance(value, list):
+                return any(_walk(item) for item in value)
+            return False
+
+        return _walk(data)
 
     def extract_number(self, text: str) -> float:
         text = text.replace("\xa0", " ")

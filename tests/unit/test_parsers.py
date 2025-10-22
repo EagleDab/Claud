@@ -59,3 +59,23 @@ async def test_mk4s_parser_variants(monkeypatch):
     result = await parser.fetch_product("https://mk4s.ru/p/sku-1", variant="Blue")
     assert result.price == 3333
     assert result.sku == "BLU"
+
+
+@pytest.mark.asyncio
+async def test_mk4s_parser_handles_json_assignment(monkeypatch):
+    parser = MK4SParser()
+    html = """
+    <html><body>
+      <script>
+        window.__NUXT__ = {"product": {"name": "Assigned JSON", "variants": {"Green": {"price": 4444, "sku": "GRN"}}}};
+      </script>
+    </body></html>
+    """
+
+    async def fake_fetch(url):
+        return html
+
+    monkeypatch.setattr(parser, "fetch_html", fake_fetch)
+    result = await parser.fetch_product("https://mk4s.ru/p/sku-2", variant="Green")
+    assert result.price == 4444
+    assert result.sku == "GRN"
