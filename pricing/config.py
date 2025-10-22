@@ -31,9 +31,7 @@ class Settings(BaseSettings):
     )
     telegram_admin_ids: List[int] = Field(default_factory=list, description="List of Telegram user IDs with admin rights.")
 
-    msklad_username: Optional[str] = Field(None, description="Username for MoySklad API authentication.")
-    msklad_password: Optional[str] = Field(None, description="Password for MoySklad API authentication.")
-    msklad_token: Optional[str] = Field(None, description="API token for MoySklad if basic auth is not used.")
+    msklad_token: Optional[str] = Field(None, description="API token for MoySklad API authentication.")
     msklad_account_url: AnyHttpUrl = Field(
         "https://api.moysklad.ru/api/remap/1.2",
         description="Base URL of the MoySklad API.",
