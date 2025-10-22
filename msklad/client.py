@@ -21,8 +21,6 @@ class MoySkladClient:
     def __init__(
         self,
         base_url: str | None = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
         token: Optional[str] = None,
         session: Optional[requests.Session] = None,
     ) -> None:
@@ -39,14 +37,13 @@ class MoySkladClient:
             "Content-Type": "application/json",
         })
 
-        if token:
-            self.session.headers["Authorization"] = f"Bearer {token}"
-        elif username and password:
-            self.session.auth = (username, password)
-        elif settings.msklad_token:
-            self.session.headers["Authorization"] = f"Bearer {settings.msklad_token}"
-        elif settings.msklad_username and settings.msklad_password:
-            self.session.auth = (settings.msklad_username, settings.msklad_password)
+        auth_token = token or settings.msklad_token
+        if auth_token:
+            self.session.headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            LOGGER.warning(
+                "No MoySklad API token configured; requests will fail with authentication errors",
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
