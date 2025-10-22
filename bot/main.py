@@ -1,12 +1,17 @@
 """Entry point for the Telegram bot."""
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Dict, Iterable, List, Tuple
+from typing import Awaitable, Dict, Iterable, List, Protocol, Sequence, Tuple, cast
 from urllib.parse import urljoin, urlparse
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -30,6 +35,20 @@ from pricing.service import PriceMonitorService
 from scraper import ScraperService
 
 LOGGER = logging.getLogger(__name__)
+
+
+class MessageEditor(Protocol):
+    def edit_message_text(
+        self, text: str, *args, **kwargs
+    ) -> Awaitable[Message | bool]:
+        """Edit message content within Telegram."""
+
+
+def _require_message(update: Update) -> Message | None:
+    message = update.effective_message
+    if message is None:
+        LOGGER.warning("Update %s does not contain a message", update.update_id)
+    return message
 
 SUPPORTED_SITES: Dict[str, str] = {
     "moscow.petrovich.ru": "petrovich",
@@ -88,21 +107,28 @@ def parse_rules(arguments: Iterable[str]) -> List[PricingRule]:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
+    message = _require_message(update)
+    if message is None:
+        return
+    await message.reply_text(
         "Добро пожаловать! Используйте /add_product <url> <код> <тип=правило>..."
     )
 
 
 async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text(
+    message = _require_message(update)
+    if message is None:
+        return
+    args = list(context.args or [])
+    if len(args) < 2:
+        await message.reply_text(
             "Использование: /add_product <url> <код МойСклад> [<тип=правило> ...]"
         )
         return
 
-    url = context.args[0]
-    code = context.args[1]
-    rule_args = context.args[2:]
+    url = args[0]
+    code = args[1]
+    rule_args = args[2:]
     try:
         with session_scope() as session:
             site = ensure_site(session, url)
@@ -120,17 +146,21 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             session.add(link)
             session.flush()
             product_id = product.id
-        await update.message.reply_text(f"Товар добавлен с id={product_id}")
+        await message.reply_text(f"Товар добавлен с id={product_id}")
     except Exception as exc:  # pragma: no cover - runtime validation
         LOGGER.exception("Failed to add product")
-        await update.message.reply_text(f"Ошибка: {exc}")
+        await message.reply_text(f"Ошибка: {exc}")
 
 
 async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /add_category <url категории>")
+    message = _require_message(update)
+    if message is None:
         return
-    url = context.args[0]
+    args = list(context.args or [])
+    if not args:
+        await message.reply_text("Использование: /add_category <url категории>")
+        return
+    url = args[0]
     try:
         with session_scope() as session:
             site = ensure_site(session, url)
@@ -181,70 +211,84 @@ async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if len(snapshots) > 10:
             text_lines.append("…")
         text_lines.append("Назначьте коды через /set_price_types и правила через /set_rules.")
-        await update.message.reply_text("\n".join(text_lines))
+        await message.reply_text("\n".join(text_lines))
     except Exception as exc:  # pragma: no cover
         LOGGER.exception("Failed to add category")
-        await update.message.reply_text(f"Ошибка: {exc}")
+        await message.reply_text(f"Ошибка: {exc}")
 
 
 async def set_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if len(context.args) < 2:
-        await update.message.reply_text("Использование: /set_rules <id> <тип=правило> ...")
+    message = _require_message(update)
+    if message is None:
         return
-    product_id = int(context.args[0])
-    rule_args = context.args[1:]
+    args = list(context.args or [])
+    if len(args) < 2:
+        await message.reply_text("Использование: /set_rules <id> <тип=правило> ...")
+        return
+    product_id = int(args[0])
+    rule_args = args[1:]
     try:
         rules = parse_rules(rule_args)
     except ValueError as exc:
-        await update.message.reply_text(str(exc))
+        await message.reply_text(str(exc))
         return
 
     with session_scope() as session:
         product = session.get(Product, product_id)
         if not product:
-            await update.message.reply_text("Товар не найден")
+            await message.reply_text("Товар не найден")
             return
         session.query(PricingRule).filter_by(product_id=product_id).delete(synchronize_session=False)
         for rule in rules:
             rule.product_id = product_id
             session.add(rule)
-    await update.message.reply_text("Правила обновлены")
+    await message.reply_text("Правила обновлены")
 
 
 async def set_price_types(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if len(context.args) < 3:
-        await update.message.reply_text("Использование: /set_price_types <id> <код МойСклад> <тип1> [тип2 ...]")
+    message = _require_message(update)
+    if message is None:
         return
-    product_id = int(context.args[0])
-    code = context.args[1]
-    price_types = [arg.replace("_", " ") for arg in context.args[2:]]
+    args = list(context.args or [])
+    if len(args) < 3:
+        await message.reply_text(
+            "Использование: /set_price_types <id> <код МойСклад> <тип1> [тип2 ...]"
+        )
+        return
+    product_id = int(args[0])
+    code = args[1]
+    price_types = [arg.replace("_", " ") for arg in args[2:]]
     with session_scope() as session:
         product = session.get(Product, product_id)
         if not product:
-            await update.message.reply_text("Товар не найден")
+            await message.reply_text("Товар не найден")
             return
-        link = product.links[0] if product.links else None
+        links = cast(Sequence[MSkladLink], product.links or [])
+        link = links[0] if links else None
         if link:
             link.price_types = price_types
             link.msklad_code = code
         else:
             session.add(MSkladLink(product_id=product_id, msklad_code=code, price_types=price_types))
-    await update.message.reply_text("Типы цен обновлены")
+    await message.reply_text("Типы цен обновлены")
 
 
 async def list_items(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = _require_message(update)
+    if message is None:
+        return
     with session_scope() as session:
         rows = [
             (
                 product.id,
                 product.competitor_url,
                 float(product.last_price) if product.last_price is not None else None,
-                len(product.pricing_rules),
+                len(cast(Sequence[PricingRule], product.pricing_rules or [])),
             )
             for product in session.query(Product).filter_by(enabled=True).all()
         ]
     if not rows:
-        await update.message.reply_text("Список пуст")
+        await message.reply_text("Список пуст")
         return
     messages = []
     keyboard: List[List[InlineKeyboardButton]] = []
@@ -257,14 +301,17 @@ async def list_items(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 InlineKeyboardButton("Отключить", callback_data=f"disable:{product_id}"),
             ]
         )
-    await update.message.reply_text(
+    await message.reply_text(
         "\n\n".join(messages),
         reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
     )
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query: CallbackQuery | None = update.callback_query
+    if query is None:
+        LOGGER.warning("Callback router invoked without a callback query")
+        return
     await query.answer()
     data = query.data or ""
     if data.startswith("check:"):
@@ -279,7 +326,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(f"Мониторинг товара #{product_id} отключен")
 
 
-async def perform_recheck(query, product_id: int) -> None:
+async def perform_recheck(query: MessageEditor, product_id: int) -> None:
     with session_scope() as session:
         product = session.get(Product, product_id)
         if not product:
@@ -297,34 +344,47 @@ async def perform_recheck(query, product_id: int) -> None:
 
 
 async def test_notify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Тестовое уведомление: система работает")
+    message = _require_message(update)
+    if message is None:
+        return
+    await message.reply_text("Тестовое уведомление: система работает")
 
 
 async def recheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /recheck <id>")
+    message = _require_message(update)
+    if message is None:
         return
-    product_id = int(context.args[0])
-    class Dummy:
-        async def edit_message_text(self, text: str) -> None:
-            await update.message.reply_text(text)
+    args = list(context.args or [])
+    if not args:
+        await message.reply_text("Использование: /recheck <id>")
+        return
+    product_id = int(args[0])
+
+    class Dummy(MessageEditor):
+        async def edit_message_text(self, text: str, *args, **kwargs) -> Message:
+            return await message.reply_text(text)
+
     query = Dummy()
     await perform_recheck(query, product_id)
 
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /delete <id>")
+    message = _require_message(update)
+    if message is None:
         return
-    product_id = int(context.args[0])
+    args = list(context.args or [])
+    if not args:
+        await message.reply_text("Использование: /delete <id>")
+        return
+    product_id = int(args[0])
     with session_scope() as session:
         product = session.get(Product, product_id)
         if product:
             product.enabled = False
-    await update.message.reply_text(f"Мониторинг товара #{product_id} отключен")
+    await message.reply_text(f"Мониторинг товара #{product_id} отключен")
 
 
-async def main() -> None:
+def main() -> None:
     logging.basicConfig(level=logging.INFO)
     init_database()
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -340,12 +400,9 @@ async def main() -> None:
     application.add_handler(CommandHandler("delete", delete))
     application.add_handler(CallbackQueryHandler(callback_router))
 
-    await application.initialize()
-    await application.start()
-    LOGGER.info("Bot started")
-    await application.updater.start_polling()
-    await application.updater.idle()
+    LOGGER.info("Starting bot polling")
+    application.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
