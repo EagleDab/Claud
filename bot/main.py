@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Iterable, List, Protocol, Sequence, Tuple, cast
+from typing import Awaitable, Dict, Iterable, List, Protocol, Sequence, Tuple, cast
 from urllib.parse import urljoin, urlparse
 
 from telegram import (
@@ -38,7 +38,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 class MessageEditor(Protocol):
-    async def edit_message_text(self, text: str) -> None:
+    def edit_message_text(
+        self, text: str, *args, **kwargs
+    ) -> Awaitable[Message | bool]:
         """Edit message content within Telegram."""
 
 
@@ -359,8 +361,8 @@ async def recheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     product_id = int(args[0])
 
     class Dummy(MessageEditor):
-        async def edit_message_text(self, text: str) -> None:
-            await message.reply_text(text)
+        async def edit_message_text(self, text: str, *args, **kwargs) -> Message:
+            return await message.reply_text(text)
 
     query = Dummy()
     await perform_recheck(query, product_id)
