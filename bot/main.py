@@ -40,6 +40,7 @@ SUPPORTED_SITES: Dict[str, str] = {
 }
 
 
+
 def ensure_site(session, url: str) -> Site:
     parsed = urlparse(url)
     host = parsed.netloc.lower()
