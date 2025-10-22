@@ -37,7 +37,7 @@ from db.session import init_database
 from msklad import MoySkladClient, MoySkladError
 from pricing.config import settings
 from pricing.service import PriceMonitorService
-from scraper import ScraperService
+from scraper import ScraperError, ScraperService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -517,7 +517,20 @@ async def perform_recheck(query: MessageEditor, product_id: int) -> None:
             await query.edit_message_text("Товар не найден")
             return
         service = PriceMonitorService(session)
-        event = await service.check_product(product)
+        try:
+            event = await service.check_product(product)
+        except ScraperError as exc:
+            LOGGER.exception("Failed to fetch competitor price for product %s", product_id)
+            await query.edit_message_text(f"Не удалось проверить товар: {exc}")
+            return
+        except MoySkladError as exc:
+            LOGGER.exception("Failed to push updated price to MoySklad for product %s", product_id)
+            await query.edit_message_text(f"Не удалось обновить цену в МойСклад: {exc}")
+            return
+        except Exception as exc:  # pragma: no cover - unexpected runtime issues
+            LOGGER.exception("Unexpected error during manual recheck for product %s", product_id)
+            await query.edit_message_text(f"Ошибка при проверке товара: {exc}")
+            return
         session.flush()
     if event:
         await query.edit_message_text(
