@@ -26,7 +26,13 @@ class MoySkladClient:
         token: Optional[str] = None,
         session: Optional[requests.Session] = None,
     ) -> None:
-        self.base_url = (base_url or settings.msklad_account_url).rstrip("/")
+        # ``settings.msklad_account_url`` is typed as ``AnyHttpUrl`` in the
+        # settings model, which Pydantic represents with its own ``Url`` class.
+        # ``Url`` instances do not implement string specific helpers like
+        # :meth:`rstrip`, so cast the value to ``str`` before normalising the
+        # trailing slash. The cast keeps compatibility with explicit string
+        # ``base_url`` arguments and avoids ``AttributeError`` during runtime.
+        self.base_url = str(base_url or settings.msklad_account_url).rstrip("/")
         self.session = session or requests.Session()
         self.session.headers.update({
             "Accept": "application/json",
