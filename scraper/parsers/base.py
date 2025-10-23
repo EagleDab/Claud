@@ -176,15 +176,6 @@ class BaseParser:
             "Pragma": "no-cache",
         }
 
-    def _build_headers(self) -> dict[str, str]:
-        return {
-            "User-Agent": self._choose_user_agent(),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-        }
-
     def _is_antibot_response(self, response: requests.Response) -> bool:
         if response.status_code in (403, 429):
             return True
