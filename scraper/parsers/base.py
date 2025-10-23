@@ -4,11 +4,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 import cloudscraper
 import requests
@@ -26,6 +30,20 @@ class ScraperError(RuntimeError):
 
 class PriceNotFoundError(ScraperError):
     """Raised when a price cannot be extracted from a page."""
+
+
+def to_decimal(text: str) -> Decimal:
+    """Normalise a price string to :class:`~decimal.Decimal`."""
+
+    cleaned = (text or "").replace("\xa0", " ").replace("\u2009", " ").replace("\u202F", " ").replace(
+        "\u2007", " "
+    )
+    cleaned = re.sub(r"[^\d.,\s]", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned).replace(",", ".")
+    match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise PriceNotFoundError("Price pattern not found")
+    return Decimal(match.group(0))
 
 
 @dataclass
@@ -55,6 +73,8 @@ class BaseParser:
         self._scraper = cloudscraper.create_scraper()
         self._user_agent_provider = UserAgent()
         self._cloudscraper_fallbacks = 0
+        self._consecutive_antibot = 0
+        self._antibot_dumped = False
 
     # ------------------------------------------------------------------
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
@@ -74,7 +94,8 @@ class BaseParser:
         return await asyncio.to_thread(self._fetch_html_sync, url)
 
     def _fetch_html_sync(self, url: str) -> str:
-        headers = {"User-Agent": self._choose_user_agent(), "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"}
+        headers = self._build_headers()
+        last_error: Exception | None = None
         for attempt in range(1, settings.http_retries + 1):
             try:
                 response = self._session.get(url, headers=headers, timeout=settings.http_timeout)
@@ -82,13 +103,18 @@ class BaseParser:
                     LOGGER.warning(
                         "Anti-bot detected during requests fetch", extra={"url": url, "status": response.status_code}
                     )
+                    self._record_antibot(url, response.text)
                     time.sleep(settings.anti_bot_delay_seconds)
+                    headers = self._build_headers()
                     continue
                 response.raise_for_status()
+                self._reset_antibot()
                 return response.text
             except Exception as exc:  # pragma: no cover - network dependent
                 LOGGER.warning("Primary fetch failed", exc_info=exc)
+                last_error = exc
                 time.sleep(settings.anti_bot_delay_seconds)
+                headers = self._build_headers()
 
         LOGGER.info("Falling back to cloudscraper", extra={"url": url})
         self._cloudscraper_fallbacks += 1
@@ -99,12 +125,38 @@ class BaseParser:
         try:
             result = self._scraper.get(url, headers=headers, timeout=settings.http_timeout)
             result.raise_for_status()
-            return result.text
+            if self._is_antibot_response(result):
+                self._record_antibot(url, result.text)
+            else:
+                self._reset_antibot()
+                return result.text
         except Exception as exc:  # pragma: no cover - network dependent
             LOGGER.error("Cloudscraper failed", exc_info=exc)
+            last_error = exc
+
+        try:
+            import playwright  # noqa: F401
+        except Exception:
+            LOGGER.info("Playwright not installed, skipping", extra={"url": url})
+            raise ScraperError("Failed to fetch HTML; Playwright unavailable") from last_error
 
         LOGGER.info("Falling back to Playwright", extra={"url": url})
-        return asyncio.run(self._fetch_with_playwright(url))
+        try:
+            return asyncio.run(self._fetch_with_playwright(url))
+        except ScraperError:
+            raise
+        except Exception as exc:  # pragma: no cover - Playwright environment dependent
+            LOGGER.warning("Playwright fallback failed", exc_info=exc, extra={"url": url})
+            raise ScraperError("Playwright fetch failed") from exc
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self._choose_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
 
     def _is_antibot_response(self, response: requests.Response) -> bool:
         if response.status_code in (403, 429):
@@ -118,19 +170,70 @@ class BaseParser:
         except Exception:
             return settings.user_agent
 
+    def _record_antibot(self, url: str, html: str | None) -> None:
+        self._consecutive_antibot += 1
+        if html and self._consecutive_antibot >= 3 and not self._antibot_dumped:
+            try:
+                self._dump_debug_html(url, html)
+            except Exception:  # pragma: no cover - filesystem issues
+                LOGGER.debug("Failed to dump anti-bot HTML", exc_info=True, extra={"url": url})
+            else:
+                self._antibot_dumped = True
+
+    def _reset_antibot(self) -> None:
+        self._consecutive_antibot = 0
+        self._antibot_dumped = False
+
+    def _dump_debug_html(self, url: str, html: str) -> None:
+        host = urlparse(url).hostname or "unknown"
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        dump_dir = Path(".debug_dumps")
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        path = dump_dir / f"{host}_{timestamp}.html"
+        snippet = html[:3000]
+        path.write_text(snippet, encoding="utf-8")
+        LOGGER.debug("Saved anti-bot debug dump", extra={"url": url, "path": str(path)})
+
     # ------------------------------------------------------------------
     async def _fetch_with_playwright(self, url: str) -> str:
         from playwright.async_api import async_playwright
 
-        async with async_playwright() as p:  # pragma: no cover - requires browser
-            browser = await p.chromium.launch(headless=settings.playwright_headless, slow_mo=settings.playwright_slow_mo)
-            context = await browser.new_context(user_agent=self._choose_user_agent())
-            page = await context.new_page()
-            await page.goto(url, wait_until="networkidle")
-            await asyncio.sleep(1)
-            content = await page.content()
-            await browser.close()
-            return content
+        launch_args = (os.environ.get("PW_LAUNCH_ARGS") or "").split()
+        price_wait_map = {
+            "whitehills.ru": "span.price_value",
+            "moscow.petrovich.ru": "[data-test='product-retail-price']",
+            "petrovich.ru": "[data-test='product-retail-price']",
+        }
+
+        try:
+            async with async_playwright() as playwright_ctx:  # pragma: no cover - requires browser
+                browser = await playwright_ctx.chromium.launch(
+                    headless=settings.playwright_headless,
+                    slow_mo=settings.playwright_slow_mo,
+                    args=launch_args or None,
+                )
+                context = None
+                try:
+                    context = await browser.new_context(user_agent=self._choose_user_agent())
+                    page = await context.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    selector = next((value for key, value in price_wait_map.items() if key in url), None)
+                    if selector:
+                        try:
+                            await page.wait_for_selector(selector, timeout=6000)
+                        except Exception:
+                            pass
+                    html = await page.content()
+                finally:
+                    if context is not None:
+                        await context.close()
+                    await browser.close()
+        except Exception as exc:  # pragma: no cover - Playwright environment dependent
+            LOGGER.warning("Playwright fetch failed", exc_info=exc, extra={"url": url})
+            raise ScraperError("Playwright fetch failed") from exc
+
+        self._reset_antibot()
+        return html
 
     # ------------------------------------------------------------------
     def parse_json_from_scripts(self, soup: BeautifulSoup, keys: Iterable[str]) -> Dict[str, Any]:
@@ -244,16 +347,10 @@ class BaseParser:
         elif isinstance(value, (int, float)):
             decimal_value = Decimal(str(value))
         elif isinstance(value, str):
-            match = re.search(r"[0-9\s]+(?:[.,][0-9]{1,2})?", value)
-            if not match:
-                raise ValueError(f"No numeric value in '{value}'")
-            normalized = match.group(0)
-            normalized = re.sub(r"[\s\xa0]", "", normalized)
-            normalized = normalized.replace(",", ".")
             try:
-                decimal_value = Decimal(normalized)
-            except InvalidOperation as exc:
-                raise ValueError(f"Invalid decimal value '{value}'") from exc
+                decimal_value = to_decimal(value)
+            except (ValueError, PriceNotFoundError) as exc:
+                raise ValueError(f"No numeric value in '{value}'") from exc
         else:
             raise TypeError(f"Unsupported price type: {type(value)!r}")
 
@@ -267,4 +364,10 @@ class BaseParser:
         return "|".join(items)
 
 
-__all__ = ["BaseParser", "PriceNotFoundError", "ProductSnapshot", "ScraperError"]
+__all__ = [
+    "BaseParser",
+    "PriceNotFoundError",
+    "ProductSnapshot",
+    "ScraperError",
+    "to_decimal",
+]
