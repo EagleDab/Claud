@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
-from typing import Iterable, List, Optional, Dict, Any
+from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
 from db import PriceEvent, PricingRule, Product, session_scope
 from db.models import CategoryItem
-from msklad import MoySkladClient
+from msklad import MoySkladClient, MoySkladError
 from pricing.config import settings
 from pricing.rules import apply_pricing_rules, merge_rules
-from scraper import ScraperService
+from scraper import ScraperError, ScraperService
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PriceMonitorService:
@@ -35,7 +38,18 @@ class PriceMonitorService:
         if not product.enabled:
             return None
         adapter_name = product.site.parser_adapter
-        snapshot = await self.scraper.fetch_product(adapter_name, product.competitor_url, variant=product.variant_key)
+        try:
+            snapshot = await self.scraper.fetch_product(
+                adapter_name, product.competitor_url, variant=product.variant_key
+            )
+        except ScraperError as exc:
+            message = str(exc).lower()
+            if any(keyword in message for keyword in ("anti-bot", "antibot", "captcha", "cloudflare")):
+                LOGGER.warning(
+                    "Anti-bot encountered for product %s; skipping update", product.id, extra={"url": product.competitor_url}
+                )
+                return None
+            raise
         new_price = snapshot.price
         last_price = float(product.last_price) if product.last_price is not None else None
 
@@ -82,6 +96,18 @@ class PriceMonitorService:
         return self.session.query(PricingRule).filter(PricingRule.category_id.in_(category_ids)).all()
 
     async def _push_to_msklad(self, product: Product, price_map: dict[str, float]) -> None:
+        try:
+            ensured_price_types = await asyncio.to_thread(
+                self.msklad_client.ensure_price_types, price_map.keys()
+            )
+        except MoySkladError as exc:
+            LOGGER.warning(
+                "Skipping MoySklad update for product %s due to price type error: %s",
+                product.id,
+                exc,
+            )
+            return
+
         tasks = []
         fallback_price_type = settings.default_price_types[0]
         fallback_price = price_map.get(fallback_price_type)
@@ -96,7 +122,14 @@ class PriceMonitorService:
                     payload[price_type] = fallback_price
             if not payload:
                 continue
-            tasks.append(asyncio.to_thread(self.msklad_client.update_product_prices, link.msklad_code, payload))
+            tasks.append(
+                asyncio.to_thread(
+                    self.msklad_client.update_product_prices,
+                    link.msklad_code,
+                    payload,
+                    ensured_price_types,
+                )
+            )
         if tasks:
             await asyncio.gather(*tasks)
 

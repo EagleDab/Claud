@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     libgbm1 libasound2 libpango-1.0-0 libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd -g 1001 appuser && useradd -u 1001 -g appuser -d /app -s /usr/sbin/nologin appuser
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -18,7 +20,11 @@ COPY . .
 
 RUN mkdir -p /app/logs /app/.cache
 
+RUN chown -R appuser:appuser /app
+
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
+
+USER 1001:1001
 
 CMD ["python", "-m", "bot.main"]
