@@ -273,6 +273,26 @@ class MoySkladClient:
                 result[name] = item
         return result
 
+    def get_price_type_mapping(self) -> dict[str, str]:
+        """Return mapping of price type names to their meta href."""
+
+        data = self._request("GET", "/context/companysettings")
+        types = data.get("priceTypes") or []
+        mapping: dict[str, str] = {}
+        for item in types:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            meta = item.get("meta")
+            href = None
+            if isinstance(meta, dict):
+                href_value = meta.get("href")
+                if isinstance(href_value, str):
+                    href = href_value
+            if isinstance(name, str) and href:
+                mapping[name] = href
+        return mapping
+
     # ------------------------------------------------------------------
     # Product helpers
     # ------------------------------------------------------------------

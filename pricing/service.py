@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from decimal import Decimal
@@ -18,6 +19,12 @@ from pricing.rules import apply_pricing_rules, merge_rules
 from scraper import PriceNotFoundError, ScraperError, ScraperService
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _decimal_default(obj: Any) -> float:
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class PriceMonitorService:
@@ -79,12 +86,15 @@ class PriceMonitorService:
         if not price_changed:
             return None
 
+        payload = {"snapshot": snapshot.__dict__}
+        serialized_payload = json.loads(json.dumps(payload, default=_decimal_default))
+
         event = PriceEvent(
             product=product,
             old_price=last_price,
             new_price=new_price,
             detected_at=datetime.utcnow(),
-            payload={"snapshot": snapshot.__dict__},
+            payload=serialized_payload,
         )
         self.session.add(event)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from decimal import Decimal
 from typing import Iterable, Iterator, List, Optional
 
 from bs4 import BeautifulSoup
@@ -11,6 +12,11 @@ from bs4 import BeautifulSoup
 from .base import BaseParser, PriceNotFoundError, ProductSnapshot
 
 LOGGER = logging.getLogger(__name__)
+
+SCRIPT_PRICE_PATTERN = re.compile(
+    r'"(?:price|currentPrice|current)"\s*[:=]\s*"?(?P<price>[0-9]+(?:[.,][0-9]{1,2})?)',
+    re.IGNORECASE,
+)
 
 
 class PetrovichParser(BaseParser):
@@ -24,34 +30,34 @@ class PetrovichParser(BaseParser):
         sku: Optional[str] = None
 
         jsonld_product = self._extract_jsonld_product(soup, url)
-        price = None
         if jsonld_product:
             title = jsonld_product.get("name") or jsonld_product.get("title") or title
             sku = jsonld_product.get("sku") or jsonld_product.get("productID") or sku
-            price = self._price_from_jsonld(jsonld_product, url)
-            if price is not None:
-                LOGGER.debug("Petrovich price extracted from JSON-LD", extra={"url": url})
-            else:
-                LOGGER.debug("Petrovich JSON-LD price not found", extra={"url": url})
         else:
             LOGGER.debug("Petrovich JSON-LD product not found", extra={"url": url})
 
-        if price is None:
-            price = self._price_from_script_blocks(soup, url)
-        if price is None:
-            price = self._price_from_meta(soup, url)
-        if price is None:
-            price = self._price_from_selectors(soup, url)
-
+        price, method = self._extract_price_from_soup(soup, url, jsonld_product=jsonld_product)
         if price is None:
             LOGGER.warning("Petrovich price not found", extra={"url": url})
             raise PriceNotFoundError("Price not found on Petrovich product page")
+
+        LOGGER.info("Petrovich price extracted", extra={"url": url, "method": method})
 
         if not title:
             title_node = soup.select_one("h1")
             title = title_node.get_text(strip=True) if title_node else None
 
         return ProductSnapshot(url=url, price=price, currency="RUB", title=title, sku=sku, variant_key=variant)
+
+    def parse_price(self, html: str, url: str | None = None) -> Decimal:
+        """Parse a price value from HTML content."""
+
+        soup = BeautifulSoup(html, "lxml")
+        price, method = self._extract_price_from_soup(soup, url)
+        if price is None:
+            raise PriceNotFoundError("Price not found on Petrovich product page")
+        LOGGER.info("Petrovich price parsed", extra={"url": url, "method": method})
+        return price
 
     async def fetch_category(self, url: str) -> List[ProductSnapshot]:
         html = await self.fetch_html(url)
@@ -79,6 +85,31 @@ class PetrovichParser(BaseParser):
         return items
 
     # ------------------------------------------------------------------
+    def _extract_price_from_soup(
+        self,
+        soup: BeautifulSoup,
+        url: str | None,
+        *,
+        jsonld_product: Optional[dict] = None,
+    ) -> tuple[Optional[Decimal], Optional[str]]:
+        candidate = jsonld_product
+        if candidate is None:
+            candidate = self._extract_jsonld_product(soup, url or "")
+        if candidate:
+            price = self._price_from_jsonld(candidate, url)
+            if price is not None:
+                return price, "jsonld"
+        price = self._price_from_script_blocks(soup, url)
+        if price is not None:
+            return price, "script"
+        price = self._price_from_meta_tag(soup, url)
+        if price is not None:
+            return price, "meta"
+        price = self._price_from_selectors(soup, url)
+        if price is not None:
+            return price, "selector"
+        return None, None
+
     def _extract_jsonld_product(self, soup: BeautifulSoup, url: str) -> Optional[dict]:
         scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
         for script in scripts:
@@ -112,7 +143,7 @@ class PetrovichParser(BaseParser):
             return any(isinstance(item, str) and item.lower() == "product" for item in value)
         return False
 
-    def _price_from_jsonld(self, product: dict, url: str) -> Optional[object]:
+    def _price_from_jsonld(self, product: dict, url: str | None) -> Optional[Decimal]:
         offers = product.get("offers")
         if isinstance(offers, dict):
             for key in ("price", "priceValue", "lowPrice", "highPrice", "currentPrice"):
@@ -147,16 +178,15 @@ class PetrovichParser(BaseParser):
                 LOGGER.debug("Petrovich JSON-LD currentPrice invalid", extra={"url": url})
         return None
 
-    def _price_from_script_blocks(self, soup: BeautifulSoup, url: str) -> Optional[object]:
-        pattern = re.compile(r'"(?:price|currentPrice)"\s*:\s*"?([0-9\s]+(?:[.,][0-9]{1,2})?)"?', re.IGNORECASE)
+    def _price_from_script_blocks(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
         for script in soup.find_all("script"):
             text = script.string or script.text or ""
             if not text:
                 continue
-            match = pattern.search(text)
+            match = SCRIPT_PRICE_PATTERN.search(text)
             if not match:
                 continue
-            value = match.group(1)
+            value = match.group("price")
             try:
                 price = self.normalize_price(value)
             except ValueError:
@@ -167,7 +197,7 @@ class PetrovichParser(BaseParser):
         LOGGER.debug("Petrovich script blocks did not yield price", extra={"url": url})
         return None
 
-    def _price_from_meta(self, soup: BeautifulSoup, url: str) -> Optional[object]:
+    def _price_from_meta_tag(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
         meta = soup.select_one("meta[itemprop='price']")
         if not meta:
             LOGGER.debug("Petrovich meta price tag not found", extra={"url": url})
@@ -184,7 +214,7 @@ class PetrovichParser(BaseParser):
         LOGGER.debug("Petrovich price extracted from meta", extra={"url": url})
         return price
 
-    def _price_from_selectors(self, soup: BeautifulSoup, url: str) -> Optional[object]:
+    def _price_from_selectors(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
         selectors = [
             "[data-qa='product-card-price']",
             "[data-test='product-card-price']",
