@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy import (
@@ -92,7 +93,7 @@ class Product(Base):
     competitor_sku: Mapped[Optional[str]] = mapped_column(String(120))
     title: Mapped[Optional[str]] = mapped_column(String(255))
     variant_key: Mapped[Optional[str]] = mapped_column(String(255))
-    last_price: Mapped[Optional[float]] = mapped_column(Numeric(precision=12, scale=2))
+    last_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(precision=12, scale=2))
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     poll_interval_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -179,8 +180,8 @@ class PriceEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    old_price: Mapped[Optional[float]] = mapped_column(Numeric(precision=12, scale=2), nullable=True)
-    new_price: Mapped[float] = mapped_column(Numeric(precision=12, scale=2), nullable=False)
+    old_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(precision=12, scale=2), nullable=True)
+    new_price: Mapped[Decimal] = mapped_column(Numeric(precision=12, scale=2), nullable=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     pushed_to_msklad: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notification_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

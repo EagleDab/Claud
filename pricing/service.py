@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -13,7 +15,7 @@ from db.models import CategoryItem
 from msklad import MoySkladClient, MoySkladError
 from pricing.config import settings
 from pricing.rules import apply_pricing_rules, merge_rules
-from scraper import ScraperError, ScraperService
+from scraper import PriceNotFoundError, ScraperError, ScraperService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +44,14 @@ class PriceMonitorService:
             snapshot = await self.scraper.fetch_product(
                 adapter_name, product.competitor_url, variant=product.variant_key
             )
+        except PriceNotFoundError as exc:
+            LOGGER.warning(
+                "Price not found for product %s: %s",
+                product.id,
+                exc,
+                extra={"url": product.competitor_url},
+            )
+            raise
         except ScraperError as exc:
             message = str(exc).lower()
             if any(keyword in message for keyword in ("anti-bot", "antibot", "captcha", "cloudflare")):
@@ -50,10 +60,20 @@ class PriceMonitorService:
                 )
                 return None
             raise
-        new_price = snapshot.price
-        last_price = float(product.last_price) if product.last_price is not None else None
+        new_price = self._to_decimal(snapshot.price)
+        domain = urlparse(product.competitor_url).netloc
+        LOGGER.info(
+            "Fetched competitor price",
+            extra={
+                "product_id": product.id,
+                "url": product.competitor_url,
+                "domain": domain,
+                "price": str(new_price),
+            },
+        )
+        last_price = self._to_decimal(product.last_price) if product.last_price is not None else None
 
-        price_changed = last_price is None or abs(last_price - new_price) > 0.0001
+        price_changed = last_price is None or last_price != new_price
         product.last_price = new_price
         product.last_checked_at = datetime.utcnow()
         if not price_changed:
@@ -68,7 +88,7 @@ class PriceMonitorService:
         )
         self.session.add(event)
 
-        price_map = self._build_price_map(product, new_price)
+        price_map = self._build_price_map(product, float(new_price))
         if price_map:
             await self._push_to_msklad(product, price_map)
             event.pushed_to_msklad = True
@@ -88,6 +108,13 @@ class PriceMonitorService:
 
         mapping = apply_pricing_rules(price, rules)
         return dict(mapping.items())
+
+    def _to_decimal(self, value: Any) -> Decimal:
+        if isinstance(value, Decimal):
+            return value.quantize(Decimal("0.01"))
+        if value is None:
+            raise ValueError("Cannot convert None to Decimal")
+        return Decimal(str(value)).quantize(Decimal("0.01"))
 
     def _category_rules(self, product: Product) -> Iterable[PricingRule]:
         category_ids = [row.category_id for row in self.session.query(CategoryItem).filter_by(product_id=product.id)]
@@ -149,7 +176,21 @@ async def check_all_products(batch_size: int | None = None) -> List[Dict[str, An
         )
         service = PriceMonitorService(session)
         for product in products:
-            event = await service.check_product(product)
+            try:
+                event = await service.check_product(product)
+            except PriceNotFoundError as exc:
+                LOGGER.warning(
+                    "Skipping product due to missing price",
+                    extra={"product_id": product.id, "url": product.competitor_url, "reason": str(exc)},
+                )
+                continue
+            except ScraperError as exc:
+                LOGGER.error(
+                    "Failed to check product",
+                    exc_info=exc,
+                    extra={"product_id": product.id, "url": product.competitor_url},
+                )
+                continue
             if event:
                 session.flush()
                 events.append(

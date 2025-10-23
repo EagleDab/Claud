@@ -3,17 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal
 from textwrap import dedent
 from typing import Awaitable, Dict, Iterable, List, Protocol, Sequence, Tuple, cast
 from urllib.parse import urljoin, urlparse
 
-from telegram import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    Update,
-)
+from telegram import CallbackQuery, Message, Update
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -37,7 +32,7 @@ from db.session import init_database
 from msklad import MoySkladClient, MoySkladError
 from pricing.config import settings
 from pricing.service import PriceMonitorService
-from scraper import ScraperError, ScraperService
+from scraper import PriceNotFoundError, ScraperError, ScraperService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,6 +50,36 @@ def _require_message(update: Update) -> Message | None:
     if message is None:
         LOGGER.warning("Update %s does not contain a message", update.update_id)
     return message
+
+
+def _describe_user(user: object | None) -> str:
+    if user is None:
+        return "unknown"
+    user_id = getattr(user, "id", "unknown")
+    username = getattr(user, "username", None)
+    full_name = getattr(user, "full_name", None)
+    if username:
+        return f"{user_id} ({username})"
+    if full_name:
+        return f"{user_id} ({full_name})"
+    return str(user_id)
+
+
+def _split_text_lines(lines: Iterable[str], limit: int = 4096) -> List[str]:
+    chunks: List[str] = []
+    current_lines: List[str] = []
+    current_length = 0
+    for line in lines:
+        addition = len(line) + (1 if current_lines else 0)
+        if current_lines and current_length + addition > limit:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_length = 0
+        current_lines.append(line)
+        current_length += len(line) + 1
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+    return chunks
 
 SUPPORTED_SITES: Dict[str, str] = {
     "moscow.petrovich.ru": "petrovich",
@@ -462,33 +487,33 @@ async def list_items(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if message is None:
         return
     with session_scope() as session:
-        rows = [
-            (
-                product.id,
-                product.competitor_url,
-                float(product.last_price) if product.last_price is not None else None,
-                len(cast(Sequence[PricingRule], product.pricing_rules or [])),
-            )
-            for product in session.query(Product).filter_by(enabled=True).all()
-        ]
-    if not rows:
+        products = (
+            session.query(Product)
+            .filter_by(enabled=True)
+            .order_by(Product.id)
+            .all()
+        )
+    if not products:
         await message.reply_text("Список пуст")
         return
-    messages = []
-    keyboard: List[List[InlineKeyboardButton]] = []
-    for product_id, url, last_price, rule_count in rows:
-        price = f"{last_price:.2f}" if last_price is not None else "-"
-        messages.append(f"#{product_id} — {url}\nЦена: {price}\nПравил: {rule_count}")
-        keyboard.append(
-            [
-                InlineKeyboardButton("Проверить", callback_data=f"check:{product_id}"),
-                InlineKeyboardButton("Отключить", callback_data=f"disable:{product_id}"),
-            ]
+    user_label = _describe_user(getattr(message, "from_user", None))
+    LOGGER.info("Sending product list", extra={"count": len(products), "user": user_label})
+
+    lines: List[str] = ["Ваши товары:"]
+    for index, product in enumerate(products, start=1):
+        title = product.title or product.competitor_url
+        if product.last_price is not None:
+            price_value = Decimal(product.last_price).quantize(Decimal("0.01"))
+            price_text = f"{price_value:.2f}"
+        else:
+            price_text = "-"
+        lines.append(f"{index}) {title} — {price_text} — ID: {product.id}")
+        lines.append(
+            f"   Команды: /check {product.id}   /disable {product.id}   /unlink {product.id}"
         )
-    await message.reply_text(
-        "\n\n".join(messages),
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
-    )
+
+    for chunk in _split_text_lines(lines):
+        await message.reply_text(chunk)
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -519,6 +544,17 @@ async def perform_recheck(query: MessageEditor, product_id: int) -> None:
         service = PriceMonitorService(session)
         try:
             event = await service.check_product(product)
+        except PriceNotFoundError as exc:
+            LOGGER.warning(
+                "Manual recheck price not found",
+                extra={
+                    "product_id": product_id,
+                    "url": product.competitor_url,
+                    "reason": str(exc),
+                },
+            )
+            await query.edit_message_text(f"Не удалось проверить товар: {exc}")
+            return
         except ScraperError as exc:
             LOGGER.exception("Failed to fetch competitor price for product %s", product_id)
             await query.edit_message_text(f"Не удалось проверить товар: {exc}")
@@ -565,6 +601,43 @@ async def recheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await perform_recheck(query, product_id)
 
 
+async def unlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = _require_message(update)
+    if message is None:
+        return
+    args = list(context.args or [])
+    if not args:
+        await message.reply_text("Использование: /unlink <ID товара>")
+        return
+    try:
+        product_id = int(args[0])
+    except ValueError:
+        await message.reply_text("ID товара должен быть числом.")
+        return
+
+    try:
+        with session_scope() as session:
+            product = session.get(Product, product_id)
+            if not product:
+                await message.reply_text(
+                    f"Товар с ID {product_id} не найден или не принадлежит вам."
+                )
+                return
+            product.enabled = False
+            removed_links = 0
+            for link in list(product.links):
+                session.delete(link)
+                removed_links += 1
+        LOGGER.info(
+            "Product unlinked",
+            extra={"product_id": product_id, "links_removed": removed_links},
+        )
+        await message.reply_text(f"Товар {product_id} отвязан. Мониторинг остановлен.")
+    except Exception:  # pragma: no cover - unexpected runtime issues
+        LOGGER.exception("Failed to unlink product", extra={"product_id": product_id})
+        await message.reply_text("Не удалось отвязать товар. Попробуйте позже.")
+
+
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = _require_message(update)
     if message is None:
@@ -596,6 +669,7 @@ def main() -> None:
     application.add_handler(CommandHandler("list", list_items))
     application.add_handler(CommandHandler("test_notify", test_notify))
     application.add_handler(CommandHandler("recheck", recheck))
+    application.add_handler(CommandHandler("unlink", unlink))
     application.add_handler(CommandHandler("delete", delete))
     application.add_handler(CallbackQueryHandler(callback_router))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inline_product))

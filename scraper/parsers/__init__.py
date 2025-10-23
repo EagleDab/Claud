@@ -1,5 +1,5 @@
 """Collection of scraper adapters."""
-from .base import BaseParser, ProductSnapshot, ScraperError
+from .base import BaseParser, PriceNotFoundError, ProductSnapshot, ScraperError
 from .mk4s import MK4SParser
 from .petrovich import PetrovichParser
 from .whitehills import WhiteHillsParser
@@ -12,6 +12,7 @@ ADAPTER_REGISTRY = {
 
 __all__ = [
     "BaseParser",
+    "PriceNotFoundError",
     "ProductSnapshot",
     "ScraperError",
     "PetrovichParser",

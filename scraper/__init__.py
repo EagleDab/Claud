@@ -7,7 +7,13 @@ from typing import Dict, Iterable, List, Optional, Type
 from structlog import get_logger
 
 from pricing.config import settings
-from scraper.parsers import ADAPTER_REGISTRY, BaseParser, ProductSnapshot, ScraperError
+from scraper.parsers import (
+    ADAPTER_REGISTRY,
+    BaseParser,
+    PriceNotFoundError,
+    ProductSnapshot,
+    ScraperError,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -54,4 +60,4 @@ class ScraperService:
         return await asyncio.gather(*[_fetch(url) for url in urls])
 
 
-__all__ = ["ScraperService", "ProductSnapshot", "ScraperError"]
+__all__ = ["ScraperService", "ProductSnapshot", "ScraperError", "PriceNotFoundError"]
