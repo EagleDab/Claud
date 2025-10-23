@@ -282,14 +282,17 @@ class MoySkladClient:
         for item in types:
             if not isinstance(item, dict):
                 continue
-            name = item.get("name")
-            meta = item.get("meta")
-            href = None
-            if isinstance(meta, dict):
-                href_value = meta.get("href")
-                if isinstance(href_value, str):
-                    href = href_value
-            if isinstance(name, str) and href:
+            try:
+                name = item["name"]
+                href = item["meta"]["href"]
+            except (KeyError, TypeError):
+                meta = item.get("priceType")
+                try:
+                    name = item["name"]
+                    href = meta["meta"]["href"]  # type: ignore[index]
+                except (KeyError, TypeError):
+                    continue
+            if isinstance(name, str) and isinstance(href, str):
                 mapping[name] = href
         return mapping
 

@@ -20,3 +20,13 @@ def test_petrovich_price_script():
     html = '<script>{"price":{"current":149}}</script>'
     parser = PetrovichParser()
     assert parser.parse_price(html) == Decimal("149")
+
+
+def test_whitehills_span_price_value():
+    html = '<span class="values_wrapper"><span class="price_value">2 200</span></span>'
+    assert WhiteHillsParser().parse_price(html) == Decimal("2200")
+
+
+def test_petrovich_data_test_price():
+    html = '<p data-test="product-retail-price">149<span>\u2009</span><span>₽</span></p>'
+    assert PetrovichParser().parse_price(html) == Decimal("149")
