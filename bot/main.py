@@ -508,9 +508,7 @@ async def list_items(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             price_text = "-"
         lines.append(f"{index}) {title} — {price_text} — ID: {product.id}")
-        lines.append(
-            f"   Команды: /check {product.id}   /disable {product.id}   /unlink {product.id}"
-        )
+        
 
     for chunk in _split_text_lines(lines):
         await message.reply_text(chunk)
