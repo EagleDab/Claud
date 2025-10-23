@@ -54,6 +54,7 @@ class BaseParser:
         self._session = requests.Session()
         self._scraper = cloudscraper.create_scraper()
         self._user_agent_provider = UserAgent()
+        self._cloudscraper_fallbacks = 0
 
     # ------------------------------------------------------------------
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
@@ -90,6 +91,11 @@ class BaseParser:
                 time.sleep(settings.anti_bot_delay_seconds)
 
         LOGGER.info("Falling back to cloudscraper", extra={"url": url})
+        self._cloudscraper_fallbacks += 1
+        if self._cloudscraper_fallbacks > 1:
+            LOGGER.warning(
+                "Cloudscraper fallback triggered again", extra={"url": url, "count": self._cloudscraper_fallbacks}
+            )
         try:
             result = self._scraper.get(url, headers=headers, timeout=settings.http_timeout)
             result.raise_for_status()

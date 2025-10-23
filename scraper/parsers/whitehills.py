@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from decimal import Decimal
 from typing import Iterable, Iterator, List, Optional
 
 from bs4 import BeautifulSoup
@@ -10,6 +12,8 @@ from bs4 import BeautifulSoup
 from .base import BaseParser, PriceNotFoundError, ProductSnapshot
 
 LOGGER = logging.getLogger(__name__)
+
+PRICE_PATTERN = re.compile(r"[0-9\s]+(?:[.,][0-9]{1,2})?")
 
 
 class WhiteHillsParser(BaseParser):
@@ -24,29 +28,18 @@ class WhiteHillsParser(BaseParser):
         variant_key = variant
 
         jsonld_product = self._extract_jsonld_product(soup, url)
-        price = None
         if jsonld_product:
-            price = self._price_from_jsonld(jsonld_product, url)
-            if price is not None:
-                LOGGER.debug("WhiteHills price extracted from JSON-LD", extra={"url": url})
-                title = title or jsonld_product.get("name") or jsonld_product.get("title")
-                sku = jsonld_product.get("sku") or jsonld_product.get("mpn")
-                variant_key = variant or jsonld_product.get("variant")
-            else:
-                LOGGER.debug("WhiteHills JSON-LD price not found", extra={"url": url})
-        else:
-            LOGGER.debug("WhiteHills JSON-LD product not found", extra={"url": url})
+            title = jsonld_product.get("name") or jsonld_product.get("title") or title
+            sku = jsonld_product.get("sku") or jsonld_product.get("mpn") or sku
+            if variant_key is None:
+                variant_key = jsonld_product.get("variant")
 
-        if price is None:
-            price = self._price_from_meta(soup, url)
-        if price is None:
-            price = self._price_from_offers_block(soup, url)
-        if price is None:
-            price = self._price_from_visible_selectors(soup, url)
-
+        price, method = self._extract_price_from_soup(soup, url, jsonld_product=jsonld_product)
         if price is None:
             LOGGER.warning("WhiteHills price not found", extra={"url": url})
             raise PriceNotFoundError("Price not found on WhiteHills product page")
+
+        LOGGER.info("WhiteHills price extracted", extra={"url": url, "method": method})
 
         if not title:
             header = soup.select_one("h1")
@@ -60,6 +53,16 @@ class WhiteHillsParser(BaseParser):
             sku=sku,
             variant_key=variant_key,
         )
+
+    def parse_price(self, html: str, url: str | None = None) -> Decimal:
+        """Parse a price from HTML content."""
+
+        soup = BeautifulSoup(html, "lxml")
+        price, method = self._extract_price_from_soup(soup, url)
+        if price is None:
+            raise PriceNotFoundError("Price not found on WhiteHills product page")
+        LOGGER.info("WhiteHills price parsed", extra={"url": url, "method": method})
+        return price
 
     async def fetch_category(self, url: str) -> List[ProductSnapshot]:
         html = await self.fetch_html(url)
@@ -88,6 +91,28 @@ class WhiteHillsParser(BaseParser):
         return items
 
     # ------------------------------------------------------------------
+    def _extract_price_from_soup(
+        self,
+        soup: BeautifulSoup,
+        url: str | None,
+        *,
+        jsonld_product: Optional[dict] = None,
+    ) -> tuple[Optional[Decimal], Optional[str]]:
+        candidate = jsonld_product
+        if candidate is None:
+            candidate = self._extract_jsonld_product(soup, url or "")
+        if candidate:
+            price = self._price_from_jsonld(candidate, url)
+            if price is not None:
+                return price, "jsonld"
+        price = self._price_from_meta_tag(soup, url)
+        if price is not None:
+            return price, "meta"
+        price = self._price_from_text_nodes(soup, url)
+        if price is not None:
+            return price, "text"
+        return None, None
+
     def _extract_jsonld_product(self, soup: BeautifulSoup, url: str) -> Optional[dict]:
         scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
         if not scripts:
@@ -109,7 +134,7 @@ class WhiteHillsParser(BaseParser):
         LOGGER.debug("WhiteHills JSON-LD product not found", extra={"url": url})
         return None
 
-    def _price_from_jsonld(self, product: dict, url: str) -> Optional[object]:
+    def _price_from_jsonld(self, product: dict, url: str | None) -> Optional[Decimal]:
         offers = product.get("offers")
         if isinstance(offers, list):
             for offer in offers:
@@ -131,7 +156,7 @@ class WhiteHillsParser(BaseParser):
             LOGGER.debug("WhiteHills JSON-LD offers missing", extra={"url": url})
         return None
 
-    def _price_from_meta(self, soup: BeautifulSoup, url: str) -> Optional[object]:
+    def _price_from_meta_tag(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
         meta = soup.select_one("meta[itemprop='price']")
         if not meta:
             LOGGER.debug("WhiteHills meta price tag not found", extra={"url": url})
@@ -148,28 +173,9 @@ class WhiteHillsParser(BaseParser):
         LOGGER.debug("WhiteHills price extracted from meta", extra={"url": url})
         return price
 
-    def _price_from_offers_block(self, soup: BeautifulSoup, url: str) -> Optional[object]:
-        container = soup.select_one("[itemprop='offers'] [itemprop='price']")
-        if not container:
-            LOGGER.debug("WhiteHills offers block price tag not found", extra={"url": url})
-            return None
-        value = container.get("content") or container.get_text(strip=True)
-        if not value:
-            LOGGER.debug("WhiteHills offers block price empty", extra={"url": url})
-            return None
-        try:
-            price = self.normalize_price(value)
-        except ValueError:
-            LOGGER.debug("WhiteHills offers block price invalid", extra={"url": url})
-            return None
-        LOGGER.debug("WhiteHills price extracted from offers block", extra={"url": url})
-        return price
-
-    def _price_from_visible_selectors(self, soup: BeautifulSoup, url: str) -> Optional[object]:
+    def _price_from_text_nodes(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
         selectors = [
-            ".product-price",
-            ".price",
-            ".wh-price",
+            ".product__price",
             "[class*='price']",
         ]
         for selector in selectors:
@@ -177,14 +183,14 @@ class WhiteHillsParser(BaseParser):
             if not nodes:
                 continue
             for node in nodes:
-                text = node.get_text(" ", strip=True)
+                text = node.get("content") or node.get_text(" ", strip=True)
                 if not text:
                     continue
-                lowered = text.lower()
-                if "₽" not in text and "руб" not in lowered and not any(ch.isdigit() for ch in text):
+                match = PRICE_PATTERN.search(text)
+                if not match:
                     continue
                 try:
-                    price = self.normalize_price(text)
+                    price = self.normalize_price(match.group(0))
                 except ValueError:
                     LOGGER.debug(
                         "WhiteHills selector price invalid",

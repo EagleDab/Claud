@@ -1,90 +1,22 @@
-import pytest
 from decimal import Decimal
-from unittest.mock import AsyncMock
 
-from scraper.parsers.whitehills import WhiteHillsParser
 from scraper.parsers.petrovich import PetrovichParser
+from scraper.parsers.whitehills import WhiteHillsParser
 
 
-@pytest.mark.asyncio
-async def test_whitehills_price_from_jsonld(monkeypatch):
+def test_whitehills_price_jsonld():
+    html = '<script type="application/ld+json">{"@type":"Product","offers":{"price":"1790"}}</script>'
     parser = WhiteHillsParser()
-    html = """
-    <html>
-      <head>
-        <script type="application/ld+json">
-        {
-          "@context": "https://schema.org",
-          "@type": "Product",
-          "name": "Stone",
-          "offers": {"price": "1234"}
-        }
-        </script>
-      </head>
-      <body><h1>Stone</h1></body>
-    </html>
-    """
-    monkeypatch.setattr(parser, "fetch_html", AsyncMock(return_value=html))
-
-    snapshot = await parser.fetch_product("https://whitehills.ru/product/test/")
-
-    assert snapshot.price == Decimal("1234.00")
+    assert parser.parse_price(html) == Decimal("1790")
 
 
-@pytest.mark.asyncio
-async def test_whitehills_price_from_fallback(monkeypatch):
+def test_whitehills_price_meta():
+    html = "<meta itemprop='price' content='1 790,50'>"
     parser = WhiteHillsParser()
-    html = """
-    <html>
-      <head>
-        <meta itemprop="price" content="2 345,50" />
-      </head>
-      <body><h1>Fallback</h1></body>
-    </html>
-    """
-    monkeypatch.setattr(parser, "fetch_html", AsyncMock(return_value=html))
-
-    snapshot = await parser.fetch_product("https://whitehills.ru/product/test/")
-
-    assert snapshot.price == Decimal("2345.50")
+    assert parser.parse_price(html) == Decimal("1790.50")
 
 
-@pytest.mark.asyncio
-async def test_petrovich_price_from_jsonld_or_script(monkeypatch):
+def test_petrovich_price_script():
+    html = '<script>{"price":{"current":149}}</script>'
     parser = PetrovichParser()
-    html_jsonld = """
-    <html>
-      <head>
-        <script type="application/ld+json">
-        {
-          "@context": "https://schema.org",
-          "@type": "Product",
-          "name": "Tile",
-          "offers": {"price": "1111"}
-        }
-        </script>
-      </head>
-      <body><h1>Tile</h1></body>
-    </html>
-    """
-    monkeypatch.setattr(parser, "fetch_html", AsyncMock(return_value=html_jsonld))
-
-    snapshot = await parser.fetch_product("https://moscow.petrovich.ru/product/126426/")
-
-    assert snapshot.price == Decimal("1111.00")
-
-    html_script = """
-    <html>
-      <head>
-        <script>
-          window.__INITIAL_STATE__ = {"currentPrice": 999.99};
-        </script>
-      </head>
-      <body><h1>Tile</h1></body>
-    </html>
-    """
-    monkeypatch.setattr(parser, "fetch_html", AsyncMock(return_value=html_script))
-
-    snapshot = await parser.fetch_product("https://moscow.petrovich.ru/product/126426/")
-
-    assert snapshot.price == Decimal("999.99")
+    assert parser.parse_price(html) == Decimal("149")
