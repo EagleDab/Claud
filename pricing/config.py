@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List, Optional
+from os import PathLike
+from typing import Any, List, Optional
 from urllib.parse import urlparse, urlunparse
 
 from pydantic import AnyHttpUrl, Field, field_validator
@@ -17,6 +18,18 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
+
+    def __init__(
+        self,
+        _env_file: str | PathLike[str] | None = None,
+        _env_file_encoding: str | None = None,
+        **values: Any,
+    ) -> None:
+        super().__init__(
+            _env_file=_env_file,
+            _env_file_encoding=_env_file_encoding,
+            **values,
+        )
 
     database_url: str = Field(
         "postgresql+psycopg2://price_user:price_pass@db:5432/price_monitor",
