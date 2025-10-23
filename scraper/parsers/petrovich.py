@@ -4,20 +4,42 @@ from __future__ import annotations
 import json
 import logging
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Iterable, Iterator, List, Optional
 
 from bs4 import BeautifulSoup
 
-from .base import BaseParser, PriceNotFoundError, ProductSnapshot, to_decimal
+from .base import BaseParser, PriceNotFoundError, ProductSnapshot
 
 LOGGER = logging.getLogger(__name__)
 
-_SCRIPT_PRICE_PATTERN = re.compile(
-    r"\"(?:price|currentPrice|current)\"\s*[:=]\s*\"?(?P<price>\d+(?:[.,]\d{1,2})?)",
-    re.IGNORECASE,
-)
 
+def _parse_decimal_value(value: str) -> Decimal:
+    if value is None:
+        raise PriceNotFoundError("Price text is empty")
+
+    normalized = (
+        value.replace("\xa0", " ")
+        .replace("\u2009", " ")
+        .replace("\u202F", " ")
+    )
+    normalized = normalized.replace(" ", "")
+    normalized = re.sub(r"[^0-9,\.]+", "", normalized)
+    normalized = normalized.replace(",", ".")
+
+    if normalized.count(".") > 1:
+        parts = normalized.split(".")
+        integer_part = "".join(parts[:-1])
+        fractional = parts[-1]
+        normalized = f"{integer_part}.{fractional}" if fractional else integer_part
+
+    if not normalized:
+        raise PriceNotFoundError("Price text is empty")
+
+    try:
+        return Decimal(normalized)
+    except (InvalidOperation, ValueError) as exc:
+        raise PriceNotFoundError(f"Cannot convert price value: {value!r}") from exc
 
 class PetrovichParser(BaseParser):
     """Parser for Petrovich store."""
@@ -83,7 +105,7 @@ class PetrovichParser(BaseParser):
         if product_data:
             price = self._price_from_jsonld(product_data, url)
             if price is not None:
-                LOGGER.info("Petrovich: price via JSON-LD = %s", price)
+                LOGGER.info("Petrovich: price via JSON-LD offers.price = %s", price)
                 return price
 
         element = soup.select_one("[data-test='product-retail-price']")
@@ -91,19 +113,19 @@ class PetrovichParser(BaseParser):
             text = element.get_text(strip=True)
             if text:
                 try:
-                    price = to_decimal(text)
+                    price = _parse_decimal_value(text)
                 except PriceNotFoundError:
                     LOGGER.debug("Petrovich data-test price invalid", extra={"url": url})
                 else:
-                    LOGGER.info("Petrovich: price via [data-test] = %s", price)
+                    LOGGER.info("Petrovich: price via [data-test='product-retail-price'] = %s", price)
                     return price
 
-        meta = soup.select_one("meta[itemprop='price']")
+        meta = soup.select_one("meta[itemprop='price'][content]")
         if meta:
             content = meta.get("content")
             if content:
                 try:
-                    price = to_decimal(content)
+                    price = _parse_decimal_value(content)
                 except PriceNotFoundError:
                     LOGGER.debug("Petrovich meta price invalid", extra={"url": url})
                 else:
@@ -120,15 +142,18 @@ class PetrovichParser(BaseParser):
                 if not text:
                     continue
                 try:
-                    price = to_decimal(text)
+                    price = _parse_decimal_value(text)
                 except PriceNotFoundError:
                     continue
-                LOGGER.info("Petrovich: price via fallback selector %s = %s", selector, price)
+                if selector == "[itemprop='offers'] [itemprop='price']":
+                    LOGGER.info("Petrovich: price via itemprop offers price = %s", price)
+                else:
+                    LOGGER.info("Petrovich: price via class*='price' = %s", price)
                 return price
 
         script_price = self._price_from_scripts(soup)
         if script_price is not None:
-            LOGGER.info("Petrovich: price via script regex = %s", script_price)
+            LOGGER.info("Petrovich: price via inline script data = %s", script_price)
             return script_price
 
         LOGGER.warning("Petrovich price not found", extra={"url": url})
@@ -150,6 +175,36 @@ class PetrovichParser(BaseParser):
                     return candidate
         return None
 
+    def _price_from_scripts(self, soup: BeautifulSoup) -> Optional[Decimal]:
+        for script in soup.find_all("script"):
+            text = script.string or script.text or ""
+            if not text.strip():
+                continue
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+
+            for candidate in self._iter_dicts(data):
+                for key in ("current", "currentPrice", "price"):
+                    raw = candidate.get(key)
+                    if isinstance(raw, dict):
+                        for nested_key in ("current", "currentPrice", "price"):
+                            nested_value = raw.get(nested_key)
+                            if nested_value in (None, ""):
+                                continue
+                            try:
+                                return _parse_decimal_value(str(nested_value))
+                            except PriceNotFoundError:
+                                continue
+                    if raw in (None, ""):
+                        continue
+                    try:
+                        return _parse_decimal_value(str(raw))
+                    except PriceNotFoundError:
+                        continue
+        return None
+
     def _price_from_jsonld(self, product: dict, url: str | None) -> Optional[Decimal]:
         offers = product.get("offers")
         candidates: List[object] = []
@@ -159,15 +214,12 @@ class PetrovichParser(BaseParser):
             for offer in offers:
                 if isinstance(offer, dict):
                     candidates.append(offer.get("price"))
-        for key in ("price", "currentPrice", "priceValue"):
-            if key in product:
-                candidates.append(product.get(key))
 
         for raw in candidates:
             if raw in (None, ""):
                 continue
             try:
-                return to_decimal(str(raw))
+                return _parse_decimal_value(str(raw))
             except PriceNotFoundError:
                 LOGGER.debug("Petrovich JSON-LD price invalid", extra={"url": url})
                 continue
@@ -196,22 +248,23 @@ class PetrovichParser(BaseParser):
         if isinstance(product, dict):
             price_section = product.get("price")
             if isinstance(price_section, dict):
-                for key in ("current", "value", "currentPrice", "price"):
+                for key in ("current", "currentPrice", "price"):
                     raw = price_section.get(key)
                     if raw in (None, ""):
                         continue
                     try:
-                        price = to_decimal(str(raw))
+                        price = _parse_decimal_value(str(raw))
                     except PriceNotFoundError:
                         continue
-                    LOGGER.info("Petrovich: price via __NEXT_DATA__.price.%s = %s", key, price)
+                    LOGGER.info("Petrovich: price via __NEXT_DATA__.product.price.%s = %s", key, price)
                     return price
+
             for key in ("price", "currentPrice", "current"):
                 raw = product.get(key)
                 if raw in (None, ""):
                     continue
                 try:
-                    price = to_decimal(str(raw))
+                    price = _parse_decimal_value(str(raw))
                 except PriceNotFoundError:
                     continue
                 LOGGER.info("Petrovich: price via __NEXT_DATA__.product.%s = %s", key, price)
@@ -225,27 +278,12 @@ class PetrovichParser(BaseParser):
                 if raw in (None, ""):
                     continue
                 try:
-                    price = to_decimal(str(raw))
+                    price = _parse_decimal_value(str(raw))
                 except PriceNotFoundError:
                     continue
-                LOGGER.info("Petrovich: price via __NEXT_DATA__ %s = %s", key, price)
+                LOGGER.info("Petrovich: price via __NEXT_DATA__ deep search %s = %s", key, price)
                 return price
 
-        return None
-
-    def _price_from_scripts(self, soup: BeautifulSoup) -> Optional[Decimal]:
-        for script in soup.find_all("script"):
-            text = script.string or script.text or ""
-            if not text:
-                continue
-            match = _SCRIPT_PRICE_PATTERN.search(text)
-            if not match:
-                continue
-            raw = match.group("price")
-            try:
-                return to_decimal(raw)
-            except PriceNotFoundError:
-                continue
         return None
 
     def _iter_dicts(self, data: object) -> Iterator[dict]:

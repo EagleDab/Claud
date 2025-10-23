@@ -103,12 +103,16 @@ class BaseParser:
     def _fetch_html_sync(self, url: str) -> str:
         headers = self._build_headers()
         last_error: Exception | None = None
+        last_html: str | None = None
+
         for attempt in range(1, settings.http_retries + 1):
             try:
                 response = self._session.get(url, headers=headers, timeout=settings.http_timeout)
+                last_html = response.text
                 if self._is_antibot_response(response):
                     LOGGER.warning(
-                        "Anti-bot detected during requests fetch", extra={"url": url, "status": response.status_code}
+                        "Anti-bot detected during requests fetch",
+                        extra={"url": url, "status": response.status_code, "attempt": attempt},
                     )
                     self._record_antibot(url, response.text)
                     time.sleep(settings.anti_bot_delay_seconds)
@@ -118,7 +122,7 @@ class BaseParser:
                 self._reset_antibot()
                 return response.text
             except Exception as exc:  # pragma: no cover - network dependent
-                LOGGER.warning("Primary fetch failed", exc_info=exc)
+                LOGGER.warning("Primary fetch failed", exc_info=exc, extra={"url": url, "attempt": attempt})
                 last_error = exc
                 time.sleep(settings.anti_bot_delay_seconds)
                 headers = self._build_headers()
@@ -131,6 +135,7 @@ class BaseParser:
             )
         try:
             result = self._scraper.get(url, headers=headers, timeout=settings.http_timeout)
+            last_html = result.text
             result.raise_for_status()
             if self._is_antibot_response(result):
                 self._record_antibot(url, result.text)
@@ -138,23 +143,27 @@ class BaseParser:
                 self._reset_antibot()
                 return result.text
         except Exception as exc:  # pragma: no cover - network dependent
-            LOGGER.error("Cloudscraper failed", exc_info=exc)
+            LOGGER.error("Cloudscraper failed", exc_info=exc, extra={"url": url})
             last_error = exc
 
         try:
             import playwright  # noqa: F401
-        except Exception:
+        except Exception as exc:  # pragma: no cover - optional dependency
             LOGGER.info("Playwright not installed, skipping", extra={"url": url})
-            raise ScraperError("Failed to fetch HTML; Playwright unavailable") from last_error
+            if last_html is not None:
+                return last_html
+            raise ScraperError("All fetch attempts failed") from (last_error or exc)
 
         LOGGER.info("Falling back to Playwright", extra={"url": url})
         try:
-            return asyncio.run(self._fetch_with_playwright(url))
-        except ScraperError:
-            raise
+            html = asyncio.run(self._fetch_with_playwright(url))
         except Exception as exc:  # pragma: no cover - Playwright environment dependent
-            LOGGER.warning("Playwright fallback failed", exc_info=exc, extra={"url": url})
-            raise ScraperError("Playwright fetch failed") from exc
+            LOGGER.warning("Playwright fetch failed: %s", exc, exc_info=True, extra={"url": url})
+            if last_html is not None:
+                return last_html
+            raise ScraperError("All fetch attempts failed") from (last_error or exc)
+
+        return html
 
     def _build_headers(self) -> dict[str, str]:
         return {
@@ -212,32 +221,35 @@ class BaseParser:
             "petrovich.ru": "[data-test='product-retail-price']",
         }
 
-        try:
-            async with async_playwright() as playwright_ctx:  # pragma: no cover - requires browser
-                browser = await playwright_ctx.chromium.launch(
-                    headless=settings.playwright_headless,
-                    slow_mo=settings.playwright_slow_mo,
-                    args=launch_args or None,
-                )
-                context = None
+        async with async_playwright() as playwright_ctx:  # pragma: no cover - requires browser
+            browser = await playwright_ctx.chromium.launch(
+                headless=settings.playwright_headless,
+                slow_mo=settings.playwright_slow_mo,
+                args=launch_args or None,
+            )
+            context = None
+            try:
+                context = await browser.new_context(user_agent=self._choose_user_agent())
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                selector = next((value for key, value in price_wait_map.items() if key in url), None)
+                if selector:
+                    timeout = 8000
+                    if "whitehills.ru" in url:
+                        timeout = 12000
+                    try:
+                        await page.wait_for_selector(selector, timeout=timeout)
+                    except Exception:
+                        pass
                 try:
-                    context = await browser.new_context(user_agent=self._choose_user_agent())
-                    page = await context.new_page()
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    selector = next((value for key, value in price_wait_map.items() if key in url), None)
-                    if selector:
-                        try:
-                            await page.wait_for_selector(selector, timeout=6000)
-                        except Exception:
-                            pass
-                    html = await page.content()
-                finally:
-                    if context is not None:
-                        await context.close()
-                    await browser.close()
-        except Exception as exc:  # pragma: no cover - Playwright environment dependent
-            LOGGER.warning("Playwright fetch failed", exc_info=exc, extra={"url": url})
-            raise ScraperError("Playwright fetch failed") from exc
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                html = await page.content()
+            finally:
+                if context is not None:
+                    await context.close()
+                await browser.close()
 
         self._reset_antibot()
         return html
