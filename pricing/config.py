@@ -26,7 +26,7 @@ class Settings(BaseSettings):
         **values: Any,
     ) -> None:
         super().__init__(
-            _env_file=_env_file,
+            _env_file=_env_file,  # type: ignore
             _env_file_encoding=_env_file_encoding,
             **values,
         )
