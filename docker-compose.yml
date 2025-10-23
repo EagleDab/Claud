@@ -1,10 +1,4 @@
 services:
-  bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: bot-playwright   # <-- базовый playwright образ
-    # ... остальное без изменений
   db:
     image: postgres:15-alpine
     container_name: price_monitor_db
@@ -41,6 +35,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: bot-playwright
     container_name: price_monitor_bot
     command: python -m bot.main
     env_file:
@@ -59,6 +54,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: bot-playwright
     container_name: price_monitor_scheduler
     command: python -m scheduler.main
     env_file:
@@ -77,6 +73,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: bot-playwright
     container_name: price_monitor_worker
     command: celery -A scheduler.celery_app worker --loglevel=info
     env_file:

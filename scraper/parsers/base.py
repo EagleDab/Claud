@@ -26,22 +26,6 @@ LOGGER = logging.getLogger(__name__)
 _WS_CLASS = "\u00A0\u2007\u202F\u2009" + r"\s"
 
 
-def to_decimal(text: str) -> Decimal:
-    """Convert an arbitrary price string to :class:`~decimal.Decimal`."""
-
-    if text is None:
-        raise ValueError("empty price text")
-    cleaned = re.sub(rf"[^{_WS_CLASS}0-9.,]", "", text)
-    cleaned = re.sub(rf"[{_WS_CLASS}]+", "", cleaned)
-    cleaned = cleaned.replace(",", ".")
-    match = re.search(r"^\d+(?:\.\d{1,2})?$", cleaned)
-    if not match:
-        match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
-    if not match:
-        raise ValueError(f"cannot parse decimal from: {text!r}")
-    return Decimal(match.group(0))
-
-
 class ScraperError(RuntimeError):
     """Raised when scraping fails."""
 
@@ -51,16 +35,21 @@ class PriceNotFoundError(ScraperError):
 
 
 def to_decimal(text: str) -> Decimal:
-    """Normalise a price string to :class:`~decimal.Decimal`."""
+    """Convert a price string to :class:`~decimal.Decimal`."""
 
-    cleaned = (text or "").replace("\xa0", " ").replace("\u2009", " ").replace("\u202F", " ").replace(
-        "\u2007", " "
-    )
-    cleaned = re.sub(r"[^\d.,\s]", "", cleaned)
-    cleaned = re.sub(r"\s+", "", cleaned).replace(",", ".")
-    match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if text is None:
+        raise PriceNotFoundError("Price text is empty")
+
+    cleaned = re.sub(rf"[^{_WS_CLASS}0-9.,]", "", str(text))
+    cleaned = re.sub(rf"[{_WS_CLASS}]+", "", cleaned)
+    cleaned = cleaned.replace(",", ".")
+
+    match = re.search(r"^\d+(?:\.\d{1,2})?$", cleaned)
     if not match:
-        raise PriceNotFoundError("Price pattern not found")
+        match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise PriceNotFoundError(f"Price pattern not found in {text!r}")
+
     return Decimal(match.group(0))
 
 
