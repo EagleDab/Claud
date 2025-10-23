@@ -84,7 +84,10 @@ class MoySkladClient:
         missing = [name for name in price_types if name not in existing]
         for name in missing:
             payload = {"name": name}
-            LOGGER.info("Creating missing price type", extra={"name": name})
+            LOGGER.info(
+                "Creating missing price type",
+                extra={"price_type_name": name},
+            )
             data = self._request("POST", "/entity/pricetype", json=payload)
             meta = data.get("meta", {}).get("href")
             if meta:
@@ -131,7 +134,10 @@ class MoySkladClient:
         for price_name, value in price_map.items():
             meta_href = price_types.get(price_name)
             if not meta_href:
-                LOGGER.error("Price type missing after ensure", extra={"name": price_name})
+                LOGGER.error(
+                    "Price type missing after ensure",
+                    extra={"price_type_name": price_name},
+                )
                 continue
             sale_prices_payload.append({
                 "priceType": {"meta": {"href": meta_href}},
