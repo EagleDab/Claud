@@ -1,5 +1,10 @@
-
 services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: bot-playwright   # <-- базовый playwright образ
+    # ... остальное без изменений
   db:
     image: postgres:15-alpine
     container_name: price_monitor_db
