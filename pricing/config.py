@@ -3,20 +3,25 @@ from __future__ import annotations
 
 from functools import lru_cache
 from os import PathLike
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import Any, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE: Optional[Union[str, Path]] = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(ENV_FILE) if isinstance(ENV_FILE, Path) else ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     def __init__(

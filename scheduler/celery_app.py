@@ -12,6 +12,12 @@ celery_app = Celery(
     include=["scheduler.tasks"],
 )
 
-celery_app.conf.update(task_serializer="json", result_serializer="json", accept_content=["json"], timezone=settings.scheduler_timezone)
+celery_app.conf.update(
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    timezone=settings.scheduler_timezone,
+    broker_connection_retry_on_startup=True,
+)
 
 __all__ = ["celery_app"]
