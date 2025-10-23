@@ -83,10 +83,19 @@ class PriceMonitorService:
 
     async def _push_to_msklad(self, product: Product, price_map: dict[str, float]) -> None:
         tasks = []
+        fallback_price_type = settings.default_price_types[0]
+        fallback_price = price_map.get(fallback_price_type)
         for link in product.links:
             if not link.auto_update:
                 continue
-            payload = {price_type: price_map.get(price_type, price_map.get(settings.default_price_types[0])) for price_type in link.price_types}
+            payload: Dict[str, float] = {}
+            for price_type in link.price_types:
+                if price_type in price_map:
+                    payload[price_type] = price_map[price_type]
+                elif fallback_price is not None:
+                    payload[price_type] = fallback_price
+            if not payload:
+                continue
             tasks.append(asyncio.to_thread(self.msklad_client.update_product_prices, link.msklad_code, payload))
         if tasks:
             await asyncio.gather(*tasks)
