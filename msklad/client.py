@@ -32,8 +32,12 @@ class MoySkladClient:
         # ``base_url`` arguments and avoids ``AttributeError`` during runtime.
         self.base_url = str(base_url or settings.msklad_account_url).rstrip("/")
         self.session = session or requests.Session()
+        # MoySklad API requires the ``Accept`` header to explicitly specify the
+        # ``utf-8`` charset. Without it the API responds with ``400`` and error
+        # code ``1062`` complaining about an unsupported ``Accept`` value.
+        # See https://dev.moysklad.ru/doc/api/remap/1.2/#error_1062 for details.
         self.session.headers.update({
-            "Accept": "application/json",
+            "Accept": "application/json;charset=utf-8",
             "Content-Type": "application/json",
         })
 
