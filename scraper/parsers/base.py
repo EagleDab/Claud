@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional
 
 import cloudscraper
@@ -23,12 +24,16 @@ class ScraperError(RuntimeError):
     """Raised when scraping fails."""
 
 
+class PriceNotFoundError(ScraperError):
+    """Raised when a price cannot be extracted from a page."""
+
+
 @dataclass
 class ProductSnapshot:
     """Normalized representation of a product returned by an adapter."""
 
     url: str
-    price: float
+    price: Decimal | float
     currency: str
     title: Optional[str] = None
     sku: Optional[str] = None
@@ -223,9 +228,37 @@ class BaseParser:
         except ValueError:
             raise ScraperError(f"Cannot parse price from '{text}'")
 
+    def normalize_price(self, value: Any) -> Decimal:
+        """Normalize incoming price values to ``Decimal`` with two decimals."""
+
+        if value is None:
+            raise ValueError("Price value is None")
+        if isinstance(value, Decimal):
+            decimal_value = value
+        elif isinstance(value, (int, float)):
+            decimal_value = Decimal(str(value))
+        elif isinstance(value, str):
+            match = re.search(r"[0-9\s]+(?:[.,][0-9]{1,2})?", value)
+            if not match:
+                raise ValueError(f"No numeric value in '{value}'")
+            normalized = match.group(0)
+            normalized = re.sub(r"[\s\xa0]", "", normalized)
+            normalized = normalized.replace(",", ".")
+            try:
+                decimal_value = Decimal(normalized)
+            except InvalidOperation as exc:
+                raise ValueError(f"Invalid decimal value '{value}'") from exc
+        else:
+            raise TypeError(f"Unsupported price type: {type(value)!r}")
+
+        try:
+            return decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except InvalidOperation as exc:
+            raise ValueError(f"Cannot quantize decimal value '{decimal_value}'") from exc
+
     def build_variant_key(self, parts: Iterable[str]) -> str:
         items = [part.strip() for part in parts if part]
         return "|".join(items)
 
 
-__all__ = ["BaseParser", "ProductSnapshot", "ScraperError"]
+__all__ = ["BaseParser", "PriceNotFoundError", "ProductSnapshot", "ScraperError"]
