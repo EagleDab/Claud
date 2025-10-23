@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from decimal import Decimal
 from textwrap import dedent
@@ -35,6 +36,12 @@ from pricing.service import PriceMonitorService
 from scraper import PriceNotFoundError, ScraperError, ScraperService
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _decimal_default(value: object) -> float | object:
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
 
 
 class MessageEditor(Protocol):
@@ -565,6 +572,15 @@ async def perform_recheck(query: MessageEditor, product_id: int) -> None:
             LOGGER.exception("Unexpected error during manual recheck for product %s", product_id)
             await query.edit_message_text(f"Ошибка при проверке товара: {exc}")
             return
+        if event and event.payload:
+            try:
+                event.payload = json.loads(json.dumps(event.payload, default=_decimal_default))
+            except (TypeError, ValueError):
+                LOGGER.debug(
+                    "Failed to normalise event payload during manual recheck",
+                    exc_info=True,
+                    extra={"product_id": product_id},
+                )
         session.flush()
     if event:
         await query.edit_message_text(

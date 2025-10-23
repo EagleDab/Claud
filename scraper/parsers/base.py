@@ -7,8 +7,11 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 import cloudscraper
 import requests
@@ -18,6 +21,24 @@ from fake_useragent import UserAgent
 from pricing.config import settings
 
 LOGGER = logging.getLogger(__name__)
+
+_WS_CLASS = "\u00A0\u2007\u202F\u2009" + r"\s"
+
+
+def to_decimal(text: str) -> Decimal:
+    """Convert an arbitrary price string to :class:`~decimal.Decimal`."""
+
+    if text is None:
+        raise ValueError("empty price text")
+    cleaned = re.sub(rf"[^{_WS_CLASS}0-9.,]", "", text)
+    cleaned = re.sub(rf"[{_WS_CLASS}]+", "", cleaned)
+    cleaned = cleaned.replace(",", ".")
+    match = re.search(r"^\d+(?:\.\d{1,2})?$", cleaned)
+    if not match:
+        match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise ValueError(f"cannot parse decimal from: {text!r}")
+    return Decimal(match.group(0))
 
 
 class ScraperError(RuntimeError):
@@ -55,6 +76,8 @@ class BaseParser:
         self._scraper = cloudscraper.create_scraper()
         self._user_agent_provider = UserAgent()
         self._cloudscraper_fallbacks = 0
+        self._consecutive_antibot = 0
+        self._antibot_dumped = False
 
     # ------------------------------------------------------------------
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
@@ -74,7 +97,7 @@ class BaseParser:
         return await asyncio.to_thread(self._fetch_html_sync, url)
 
     def _fetch_html_sync(self, url: str) -> str:
-        headers = {"User-Agent": self._choose_user_agent(), "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"}
+        headers = self._build_headers()
         for attempt in range(1, settings.http_retries + 1):
             try:
                 response = self._session.get(url, headers=headers, timeout=settings.http_timeout)
@@ -82,13 +105,17 @@ class BaseParser:
                     LOGGER.warning(
                         "Anti-bot detected during requests fetch", extra={"url": url, "status": response.status_code}
                     )
+                    self._record_antibot(url, response.text)
                     time.sleep(settings.anti_bot_delay_seconds)
+                    headers = self._build_headers()
                     continue
                 response.raise_for_status()
+                self._reset_antibot()
                 return response.text
             except Exception as exc:  # pragma: no cover - network dependent
                 LOGGER.warning("Primary fetch failed", exc_info=exc)
                 time.sleep(settings.anti_bot_delay_seconds)
+                headers = self._build_headers()
 
         LOGGER.info("Falling back to cloudscraper", extra={"url": url})
         self._cloudscraper_fallbacks += 1
@@ -99,12 +126,25 @@ class BaseParser:
         try:
             result = self._scraper.get(url, headers=headers, timeout=settings.http_timeout)
             result.raise_for_status()
-            return result.text
+            if self._is_antibot_response(result):
+                self._record_antibot(url, result.text)
+            else:
+                self._reset_antibot()
+                return result.text
         except Exception as exc:  # pragma: no cover - network dependent
             LOGGER.error("Cloudscraper failed", exc_info=exc)
 
         LOGGER.info("Falling back to Playwright", extra={"url": url})
         return asyncio.run(self._fetch_with_playwright(url))
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self._choose_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
 
     def _is_antibot_response(self, response: requests.Response) -> bool:
         if response.status_code in (403, 429):
@@ -118,6 +158,30 @@ class BaseParser:
         except Exception:
             return settings.user_agent
 
+    def _record_antibot(self, url: str, html: str | None) -> None:
+        self._consecutive_antibot += 1
+        if html and self._consecutive_antibot >= 3 and not self._antibot_dumped:
+            try:
+                self._dump_debug_html(url, html)
+            except Exception:  # pragma: no cover - filesystem issues
+                LOGGER.debug("Failed to dump anti-bot HTML", exc_info=True, extra={"url": url})
+            else:
+                self._antibot_dumped = True
+
+    def _reset_antibot(self) -> None:
+        self._consecutive_antibot = 0
+        self._antibot_dumped = False
+
+    def _dump_debug_html(self, url: str, html: str) -> None:
+        host = urlparse(url).hostname or "unknown"
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        dump_dir = Path(".debug_dumps")
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        path = dump_dir / f"{host}_{timestamp}.html"
+        snippet = html[:3000]
+        path.write_text(snippet, encoding="utf-8")
+        LOGGER.debug("Saved anti-bot debug dump", extra={"url": url, "path": str(path)})
+
     # ------------------------------------------------------------------
     async def _fetch_with_playwright(self, url: str) -> str:
         from playwright.async_api import async_playwright
@@ -130,6 +194,7 @@ class BaseParser:
             await asyncio.sleep(1)
             content = await page.content()
             await browser.close()
+            self._reset_antibot()
             return content
 
     # ------------------------------------------------------------------
@@ -244,16 +309,10 @@ class BaseParser:
         elif isinstance(value, (int, float)):
             decimal_value = Decimal(str(value))
         elif isinstance(value, str):
-            match = re.search(r"[0-9\s]+(?:[.,][0-9]{1,2})?", value)
-            if not match:
-                raise ValueError(f"No numeric value in '{value}'")
-            normalized = match.group(0)
-            normalized = re.sub(r"[\s\xa0]", "", normalized)
-            normalized = normalized.replace(",", ".")
             try:
-                decimal_value = Decimal(normalized)
-            except InvalidOperation as exc:
-                raise ValueError(f"Invalid decimal value '{value}'") from exc
+                decimal_value = to_decimal(value)
+            except ValueError as exc:
+                raise ValueError(f"No numeric value in '{value}'") from exc
         else:
             raise TypeError(f"Unsupported price type: {type(value)!r}")
 
@@ -267,4 +326,10 @@ class BaseParser:
         return "|".join(items)
 
 
-__all__ = ["BaseParser", "PriceNotFoundError", "ProductSnapshot", "ScraperError"]
+__all__ = [
+    "BaseParser",
+    "PriceNotFoundError",
+    "ProductSnapshot",
+    "ScraperError",
+    "to_decimal",
+]
