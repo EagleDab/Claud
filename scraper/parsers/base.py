@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -47,6 +48,20 @@ class ScraperError(RuntimeError):
 
 class PriceNotFoundError(ScraperError):
     """Raised when a price cannot be extracted from a page."""
+
+
+def to_decimal(text: str) -> Decimal:
+    """Normalise a price string to :class:`~decimal.Decimal`."""
+
+    cleaned = (text or "").replace("\xa0", " ").replace("\u2009", " ").replace("\u202F", " ").replace(
+        "\u2007", " "
+    )
+    cleaned = re.sub(r"[^\d.,\s]", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned).replace(",", ".")
+    match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise PriceNotFoundError("Price pattern not found")
+    return Decimal(match.group(0))
 
 
 @dataclass
@@ -98,6 +113,7 @@ class BaseParser:
 
     def _fetch_html_sync(self, url: str) -> str:
         headers = self._build_headers()
+        last_error: Exception | None = None
         for attempt in range(1, settings.http_retries + 1):
             try:
                 response = self._session.get(url, headers=headers, timeout=settings.http_timeout)
@@ -114,6 +130,7 @@ class BaseParser:
                 return response.text
             except Exception as exc:  # pragma: no cover - network dependent
                 LOGGER.warning("Primary fetch failed", exc_info=exc)
+                last_error = exc
                 time.sleep(settings.anti_bot_delay_seconds)
                 headers = self._build_headers()
 
@@ -133,9 +150,31 @@ class BaseParser:
                 return result.text
         except Exception as exc:  # pragma: no cover - network dependent
             LOGGER.error("Cloudscraper failed", exc_info=exc)
+            last_error = exc
+
+        try:
+            import playwright  # noqa: F401
+        except Exception:
+            LOGGER.info("Playwright not installed, skipping", extra={"url": url})
+            raise ScraperError("Failed to fetch HTML; Playwright unavailable") from last_error
 
         LOGGER.info("Falling back to Playwright", extra={"url": url})
-        return asyncio.run(self._fetch_with_playwright(url))
+        try:
+            return asyncio.run(self._fetch_with_playwright(url))
+        except ScraperError:
+            raise
+        except Exception as exc:  # pragma: no cover - Playwright environment dependent
+            LOGGER.warning("Playwright fallback failed", exc_info=exc, extra={"url": url})
+            raise ScraperError("Playwright fetch failed") from exc
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self._choose_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
 
     def _build_headers(self) -> dict[str, str]:
         return {
@@ -186,16 +225,42 @@ class BaseParser:
     async def _fetch_with_playwright(self, url: str) -> str:
         from playwright.async_api import async_playwright
 
-        async with async_playwright() as p:  # pragma: no cover - requires browser
-            browser = await p.chromium.launch(headless=settings.playwright_headless, slow_mo=settings.playwright_slow_mo)
-            context = await browser.new_context(user_agent=self._choose_user_agent())
-            page = await context.new_page()
-            await page.goto(url, wait_until="networkidle")
-            await asyncio.sleep(1)
-            content = await page.content()
-            await browser.close()
-            self._reset_antibot()
-            return content
+        launch_args = (os.environ.get("PW_LAUNCH_ARGS") or "").split()
+        price_wait_map = {
+            "whitehills.ru": "span.price_value",
+            "moscow.petrovich.ru": "[data-test='product-retail-price']",
+            "petrovich.ru": "[data-test='product-retail-price']",
+        }
+
+        try:
+            async with async_playwright() as playwright_ctx:  # pragma: no cover - requires browser
+                browser = await playwright_ctx.chromium.launch(
+                    headless=settings.playwright_headless,
+                    slow_mo=settings.playwright_slow_mo,
+                    args=launch_args or None,
+                )
+                context = None
+                try:
+                    context = await browser.new_context(user_agent=self._choose_user_agent())
+                    page = await context.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    selector = next((value for key, value in price_wait_map.items() if key in url), None)
+                    if selector:
+                        try:
+                            await page.wait_for_selector(selector, timeout=6000)
+                        except Exception:
+                            pass
+                    html = await page.content()
+                finally:
+                    if context is not None:
+                        await context.close()
+                    await browser.close()
+        except Exception as exc:  # pragma: no cover - Playwright environment dependent
+            LOGGER.warning("Playwright fetch failed", exc_info=exc, extra={"url": url})
+            raise ScraperError("Playwright fetch failed") from exc
+
+        self._reset_antibot()
+        return html
 
     # ------------------------------------------------------------------
     def parse_json_from_scripts(self, soup: BeautifulSoup, keys: Iterable[str]) -> Dict[str, Any]:
@@ -311,7 +376,7 @@ class BaseParser:
         elif isinstance(value, str):
             try:
                 decimal_value = to_decimal(value)
-            except ValueError as exc:
+            except (ValueError, PriceNotFoundError) as exc:
                 raise ValueError(f"No numeric value in '{value}'") from exc
         else:
             raise TypeError(f"Unsupported price type: {type(value)!r}")

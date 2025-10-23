@@ -38,7 +38,7 @@ class WhiteHillsParser(BaseParser):
             if variant_key is None:
                 variant_key = jsonld_product.get("variant")
 
-        price = self._parse_price_from_soup(soup, url, jsonld_product=jsonld_product)
+        price = self._extract_price(soup, url, jsonld_product=jsonld_product)
 
         if not title:
             header = soup.select_one("h1")
@@ -55,7 +55,7 @@ class WhiteHillsParser(BaseParser):
 
     def parse_price(self, html: str, url: str | None = None) -> Decimal:
         soup = BeautifulSoup(html, "lxml")
-        return self._parse_price_from_soup(soup, url)
+        return self._extract_price(soup, url)
 
     async def fetch_category(self, url: str) -> List[ProductSnapshot]:
         html = await self.fetch_html(url)
@@ -84,47 +84,64 @@ class WhiteHillsParser(BaseParser):
         return items
 
     # ------------------------------------------------------------------
-    def _parse_price_from_soup(
+    def _extract_price(
         self,
         soup: BeautifulSoup,
         url: str | None,
         *,
         jsonld_product: Optional[dict] = None,
     ) -> Decimal:
-        steps_tried: List[str] = []
-
         product_data = jsonld_product or self._extract_jsonld_product(soup, url)
         if product_data:
-            jsonld_price = self._price_from_jsonld(product_data, url)
-            if jsonld_price is not None:
-                LOGGER.info("WhiteHills: price via JSON-LD = %s", jsonld_price)
-                return jsonld_price
-        steps_tried.append("jsonld")
+            price = self._price_from_jsonld(product_data, url)
+            if price is not None:
+                LOGGER.info("WhiteHills: price via JSON-LD = %s", price)
+                return price
 
-        selector_price = self._price_from_primary_selectors(soup, url)
-        if selector_price is not None:
-            return selector_price
-        steps_tried.append(".price_value")
+        for selector in ("span.price_value", ".values_wrapper .price_value"):
+            element = soup.select_one(selector)
+            if not element:
+                continue
+            text = element.get_text(strip=True)
+            if not text:
+                continue
+            try:
+                price = to_decimal(text)
+            except PriceNotFoundError:
+                continue
+            LOGGER.info("WhiteHills: price via selector %s = %s", selector, price)
+            return price
 
-        meta_price = self._price_from_meta_tag(soup, url)
-        if meta_price is not None:
-            return meta_price
-        steps_tried.append("meta[itemprop='price']")
+        meta = soup.select_one("meta[itemprop='price']")
+        if meta:
+            content = meta.get("content")
+            if content:
+                try:
+                    price = to_decimal(content)
+                except PriceNotFoundError:
+                    LOGGER.debug("WhiteHills meta price invalid", extra={"url": url})
+                else:
+                    LOGGER.info("WhiteHills: price via meta[itemprop='price'] = %s", price)
+                    return price
 
-        fallback_price = self._price_from_fallback_selectors(soup, url)
-        if fallback_price is not None:
-            return fallback_price
-        steps_tried.append("fallback-selectors")
+        for selector in ("[itemprop='offers'] [itemprop='price']", "[class*='price']"):
+            for node in soup.select(selector):
+                text = node.get("content") or node.get_text(strip=True)
+                if not text:
+                    continue
+                try:
+                    price = to_decimal(text)
+                except PriceNotFoundError:
+                    continue
+                LOGGER.info("WhiteHills: price via fallback selector %s = %s", selector, price)
+                return price
 
-        script_price = self._price_from_scripts(soup, url)
+        script_price = self._price_from_scripts(soup)
         if script_price is not None:
+            LOGGER.info("WhiteHills: price via script regex = %s", script_price)
             return script_price
-        steps_tried.append("script-regex")
 
-        LOGGER.warning(
-            "WhiteHills price not found",
-            extra={"url": url, "steps": steps_tried},
-        )
+        LOGGER.warning("WhiteHills price not found", extra={"url": url})
         raise PriceNotFoundError("Price not found on WhiteHills product page")
 
     def _extract_jsonld_product(self, soup: BeautifulSoup, url: str | None) -> Optional[dict]:
@@ -139,87 +156,33 @@ class WhiteHillsParser(BaseParser):
                 LOGGER.debug("WhiteHills JSON-LD decode failed", extra={"url": url})
                 continue
             for candidate in self._iter_dicts(data):
-                types = candidate.get("@type")
-                if self._is_product_type(types):
+                if self._is_product_type(candidate.get("@type")):
                     return candidate
-        LOGGER.debug("WhiteHills JSON-LD product not found", extra={"url": url})
         return None
 
     def _price_from_jsonld(self, product: dict, url: str | None) -> Optional[Decimal]:
         offers = product.get("offers")
-        offer_candidates: List[object] = []
+        candidates: List[object] = []
         if isinstance(offers, dict):
-            offer_candidates.append(offers.get("price"))
+            candidates.append(offers.get("price"))
         elif isinstance(offers, list):
             for offer in offers:
                 if isinstance(offer, dict):
-                    offer_candidates.append(offer.get("price"))
-        for value in offer_candidates:
-            if value in (None, ""):
+                    candidates.append(offer.get("price"))
+        if "price" in product:
+            candidates.append(product.get("price"))
+
+        for raw in candidates:
+            if raw in (None, ""):
                 continue
             try:
-                return self.normalize_price(value)
-            except ValueError:
-                LOGGER.debug("WhiteHills JSON-LD offer price invalid", extra={"url": url})
-        for key in ("price", "priceValue", "currentPrice"):
-            if key in product and product[key] not in (None, ""):
-                try:
-                    return self.normalize_price(product[key])
-                except ValueError:
-                    LOGGER.debug("WhiteHills JSON-LD %s invalid", key, extra={"url": url})
+                return to_decimal(str(raw))
+            except PriceNotFoundError:
+                LOGGER.debug("WhiteHills JSON-LD price invalid", extra={"url": url})
+                continue
         return None
 
-    def _price_from_primary_selectors(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
-        for selector in (".values_wrapper .price_value", "span.price_value"):
-            element = soup.select_one(selector)
-            if not element:
-                continue
-            text = element.get_text(strip=True)
-            if not text:
-                continue
-            try:
-                price = to_decimal(text).quantize(Decimal("0.01"))
-            except ValueError:
-                LOGGER.debug("WhiteHills selector parse failed", extra={"url": url, "selector": selector})
-                continue
-            LOGGER.info("WhiteHills: price via selector %s = %s", selector, price)
-            return price
-        return None
-
-    def _price_from_meta_tag(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
-        meta = soup.select_one("meta[itemprop='price']")
-        if not meta:
-            return None
-        content = meta.get("content")
-        if not content:
-            return None
-        try:
-            price = to_decimal(content).quantize(Decimal("0.01"))
-        except ValueError:
-            LOGGER.debug("WhiteHills meta price invalid", extra={"url": url})
-            return None
-        LOGGER.info("WhiteHills: price via meta[itemprop='price'] = %s", price)
-        return price
-
-    def _price_from_fallback_selectors(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
-        selectors = (
-            "[itemprop='offers'] [itemprop='price']",
-            "[class*='price']",
-        )
-        for selector in selectors:
-            for node in soup.select(selector):
-                text = node.get("content") or node.get_text(strip=True)
-                if not text:
-                    continue
-                try:
-                    price = to_decimal(text).quantize(Decimal("0.01"))
-                except ValueError:
-                    continue
-                LOGGER.info("WhiteHills: price via fallback selector %s = %s", selector, price)
-                return price
-        return None
-
-    def _price_from_scripts(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
+    def _price_from_scripts(self, soup: BeautifulSoup) -> Optional[Decimal]:
         for script in soup.find_all("script"):
             text = script.string or script.text or ""
             if not text:
@@ -229,12 +192,9 @@ class WhiteHillsParser(BaseParser):
                 continue
             raw = match.group("price")
             try:
-                price = to_decimal(raw).quantize(Decimal("0.01"))
-            except ValueError:
-                LOGGER.debug("WhiteHills script price invalid", extra={"url": url})
+                return to_decimal(raw)
+            except PriceNotFoundError:
                 continue
-            LOGGER.info("WhiteHills: price via script regex = %s", price)
-            return price
         return None
 
     def _iter_dicts(self, data: object) -> Iterator[dict]:
