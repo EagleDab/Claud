@@ -23,6 +23,24 @@ from pricing.config import settings
 
 LOGGER = logging.getLogger(__name__)
 
+_WS_CLASS = "\u00A0\u2007\u202F\u2009" + r"\s"
+
+
+def to_decimal(text: str) -> Decimal:
+    """Convert an arbitrary price string to :class:`~decimal.Decimal`."""
+
+    if text is None:
+        raise ValueError("empty price text")
+    cleaned = re.sub(rf"[^{_WS_CLASS}0-9.,]", "", text)
+    cleaned = re.sub(rf"[{_WS_CLASS}]+", "", cleaned)
+    cleaned = cleaned.replace(",", ".")
+    match = re.search(r"^\d+(?:\.\d{1,2})?$", cleaned)
+    if not match:
+        match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise ValueError(f"cannot parse decimal from: {text!r}")
+    return Decimal(match.group(0))
+
 
 class ScraperError(RuntimeError):
     """Raised when scraping fails."""
