@@ -23,6 +23,24 @@ from pricing.config import settings
 
 LOGGER = logging.getLogger(__name__)
 
+_WS_CLASS = "\u00A0\u2007\u202F\u2009" + r"\s"
+
+
+def to_decimal(text: str) -> Decimal:
+    """Convert an arbitrary price string to :class:`~decimal.Decimal`."""
+
+    if text is None:
+        raise ValueError("empty price text")
+    cleaned = re.sub(rf"[^{_WS_CLASS}0-9.,]", "", text)
+    cleaned = re.sub(rf"[{_WS_CLASS}]+", "", cleaned)
+    cleaned = cleaned.replace(",", ".")
+    match = re.search(r"^\d+(?:\.\d{1,2})?$", cleaned)
+    if not match:
+        match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        raise ValueError(f"cannot parse decimal from: {text!r}")
+    return Decimal(match.group(0))
+
 
 class ScraperError(RuntimeError):
     """Raised when scraping fails."""
@@ -148,6 +166,15 @@ class BaseParser:
         except Exception as exc:  # pragma: no cover - Playwright environment dependent
             LOGGER.warning("Playwright fallback failed", exc_info=exc, extra={"url": url})
             raise ScraperError("Playwright fetch failed") from exc
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self._choose_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
 
     def _build_headers(self) -> dict[str, str]:
         return {
