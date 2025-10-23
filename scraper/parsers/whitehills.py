@@ -1,7 +1,7 @@
 """Parser implementation for whitehills.ru."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from bs4 import BeautifulSoup
 
@@ -29,10 +29,15 @@ class WhiteHillsParser(BaseParser):
                 offer = offers[0]
                 if variant:
                     offer = next((o for o in offers if o.get("name") == variant or o.get("sku") == variant), offer)
-                price = float(offer.get("price") or offer.get("priceValue") or 0)
+                raw_price = cast(float | int | str | None, offer.get("price"))
+                if raw_price is None:
+                    raw_price = cast(float | int | str | None, offer.get("priceValue"))
+                price = float(raw_price) if raw_price is not None else 0.0
                 variant_key = variant or offer.get("name")
             elif "price" in product:
-                price = float(product.get("price"))
+                product_price = cast(float | int | str | None, product.get("price"))
+                if product_price is not None:
+                    price = float(product_price)
 
         if price is None:
             price_node = soup.select_one(".product-card__price-current span, .price__current")
