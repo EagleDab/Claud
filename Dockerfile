@@ -14,16 +14,19 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
+RUN playwright install --with-deps chromium
 
 COPY . .
 
-RUN mkdir -p /app/logs /app/.cache
+RUN mkdir -p /app/logs /app/.cache /ms-playwright
 
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app /ms-playwright
 
 ENV PYTHONUNBUFFERED=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1
+# если процесс под root — запускать без sandbox
+ENV PW_LAUNCH_ARGS="--no-sandbox --disable-setuid-sandbox"
 
 USER 1001:1001
 
