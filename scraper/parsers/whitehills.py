@@ -36,6 +36,7 @@ _PRICE_JSON_KEYS = {
     "lowPrice",
     "highPrice",
 }
+_PRICE_JSON_KEYS_LOWER = {key.lower() for key in _PRICE_JSON_KEYS}
 
 def to_decimal(text: str) -> Decimal:
     t = (text or "")
@@ -578,7 +579,7 @@ class WhiteHillsParser(BaseParser):
             current = stack.pop()
             if isinstance(current, dict):
                 for key, value in current.items():
-                    if isinstance(key, str) and key.lower() in PRICE_JSON_KEYS:
+                    if isinstance(key, str) and key.lower() in _PRICE_JSON_KEYS_LOWER:
                         if isinstance(value, (str, int, float)):
                             return value
                     stack.append(value)
