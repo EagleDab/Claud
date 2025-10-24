@@ -366,7 +366,7 @@ class WhiteHillsParser(BaseParser):
                     slow_mo=getattr(settings_obj, "playwright_slow_mo", 0),
                     args=PW_ARGS,
                 )
-                ctx_args = dict(
+                ctx_args: dict[str, Any] = dict(
                     locale="ru-RU",
                     timezone_id=PLAYWRIGHT_TZ,
                     user_agent=UA_REAL,
