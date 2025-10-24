@@ -15,6 +15,7 @@ from typing import Any, Optional
 import cloudscraper
 from bs4 import BeautifulSoup
 from playwright.async_api import Response, async_playwright
+from playwright._impl._api_structures import SetCookieParam
 
 from pricing.config import settings
 
@@ -473,7 +474,7 @@ class WhiteHillsParser(BaseParser):
 
                 context = await browser.new_context(**ctx_args)
 
-                manual_cookies: list[dict[str, Any]] = []
+                manual_cookies: list[SetCookieParam] = []
                 for cookie in _storage_cookies_for_domain(storage_state_data):
                     name = cookie.get("name")
                     value = cookie.get("value")
@@ -482,16 +483,16 @@ class WhiteHillsParser(BaseParser):
                     domain = cookie.get("domain") or "whitehills.ru"
                     if not domain.startswith("."):
                         domain = f".{domain}"
-                    manual_cookie: dict[str, Any] = {
+                    cookie_kwargs: dict[str, Any] = {
                         "name": name,
                         "value": value,
                         "domain": domain,
                         "path": cookie.get("path") or "/",
                     }
                     for key in ("expires", "httpOnly", "secure", "sameSite"):
-                        if key in cookie:
-                            manual_cookie[key] = cookie[key]
-                    manual_cookies.append(manual_cookie)
+                        if key in cookie and cookie[key] is not None:
+                            cookie_kwargs[key] = cookie[key]
+                    manual_cookies.append(SetCookieParam(**cookie_kwargs))
 
                 if manual_cookies:
                     try:
