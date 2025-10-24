@@ -53,7 +53,128 @@ class WhiteHillsParser(BaseParser):
     """Parser for WhiteHills store."""
 
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
-        price = await self._fetch_price_playwright(url)
+        price: Optional[Decimal] = None
+
+        try:  # pragma: no cover - optional dependency
+            from playwright.async_api import (  # type: ignore import-not-found
+                TimeoutError as PlaywrightTimeoutError,
+                async_playwright,
+            )
+        except Exception:
+            LOGGER.info("whitehills: playwright unavailable", extra={"url": url})
+        else:  # pragma: no cover - requires browser
+            browser = None
+            context = None
+            page = None
+            try:
+                async with async_playwright() as playwright_ctx:
+                    launch_args = shlex.split(os.environ.get("PW_LAUNCH_ARGS", ""))
+                    browser = await playwright_ctx.chromium.launch(
+                        headless=settings.playwright_headless,
+                        args=launch_args or None,
+                    )
+                    headers = self._build_headers().copy()
+                    user_agent = headers.pop("User-Agent", None) or self._choose_user_agent()
+                    context = await browser.new_context(user_agent=user_agent, extra_http_headers=headers)
+                    page = await context.new_page()
+                    await page.goto(url, wait_until="networkidle")
+                    await page.wait_for_timeout(2000)
+
+                    try:
+                        await page.wait_for_selector(
+                            "script[type='application/ld+json'], .price_value",
+                            timeout=8000,
+                        )
+                    except PlaywrightTimeoutError:
+                        LOGGER.warning("WhiteHills price element not found", extra={"url": url})
+
+                    scripts = await page.query_selector_all("script[type='application/ld+json']")
+                    for script in scripts:
+                        try:
+                            raw_json = await script.inner_text()
+                            if not raw_json:
+                                continue
+                            data = json.loads(raw_json)
+                        except Exception:
+                            continue
+
+                        items: Iterable[Any]
+                        if isinstance(data, list):
+                            items = data
+                        else:
+                            items = [data]
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            offers = item.get("offers")
+                            offer_items: Iterable[Any]
+                            if isinstance(offers, list):
+                                offer_items = offers
+                            elif offers is None:
+                                offer_items = []
+                            else:
+                                offer_items = [offers]
+                            for offer in offer_items:
+                                if isinstance(offer, dict) and "price" in offer:
+                                    try:
+                                        price_value = float(offer["price"])
+                                    except (TypeError, ValueError):
+                                        continue
+                                    price = Decimal(str(price_value))
+                                    break
+                            if price is not None:
+                                break
+                        if price is not None:
+                            break
+
+                    if price is None:
+                        try:
+                            price_el = await page.query_selector(".price_value")
+                        except PlaywrightTimeoutError:
+                            price_el = None
+                        if price_el is None:
+                            LOGGER.warning("WhiteHills price element not found", extra={"url": url})
+                        else:
+                            try:
+                                text = await price_el.inner_text()
+                            except Exception:
+                                text = ""
+                            text = (text or "").strip()
+                            text = (
+                                text.replace(" ", "")
+                                .replace("\xa0", "")
+                                .replace("₽", "")
+                                .replace(",", ".")
+                            )
+                            if text:
+                                try:
+                                    price_value = float(text)
+                                except ValueError:
+                                    price_value = None
+                                if price_value is not None:
+                                    price = Decimal(str(price_value))
+                                else:
+                                    LOGGER.warning("WhiteHills price element not found", extra={"url": url})
+                            else:
+                                LOGGER.warning("WhiteHills price element not found", extra={"url": url})
+            except Exception as exc:
+                LOGGER.warning("WhiteHills playwright extract error: %s", exc, extra={"url": url})
+            finally:
+                try:
+                    if page is not None:
+                        await page.close()
+                except Exception:
+                    pass
+                try:
+                    if context is not None:
+                        await context.close()
+                except Exception:
+                    pass
+                try:
+                    if browser is not None:
+                        await browser.close()
+                except Exception:
+                    pass
 
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
