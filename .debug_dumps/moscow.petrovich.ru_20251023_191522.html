@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ÐÐµÑÑÐ¾Ð²Ð¸Ñ â ÐÐ²ÐµÐ´Ð¸ÑÐµ ÐºÐ°Ð¿ÑÑ</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: light only;
+        --color-brand-bg: #ffcc33;
+        --color-card-bg: #ffffff;
+        --color-border: #d9dde3;
+        --color-text-primary: rgba(0, 0, 0, 0.9);
+        --color-text-muted: rgba(0, 0, 0, 0.6);
+        --color-text-soft: rgba(0, 0, 0, 0.5);
+        --color-button-bg: #ffe38f;
+        --shadow-card: 0px 24px 38px rgba(68, 92, 130, 0.14),
+          0px 9px 46px rgba(68, 92, 130, 0.12),
+          0px 11px 15px rgba(68, 92, 130, 0.2);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Roboto", sans-serif;
+        background: var(--color-brand-bg);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+      }
+
+      .page {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 32px 16px;
+      }
+
+      .captcha-card {
+        width: 400px;
+        max-width: calc(100vw - 32px);
+        background: var(--color-card-bg);
+        border-radius: 12px;
+        box-shadow: var(--shadow-card);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .card-header-spacer {
+        height: 48px;
+        background: transparent;
+      }
+
+      .card-body {
+        padding: 0 24px 40px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: stretch;
+      }
+
+      .card-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        margin-top: 8px;
+      }
+
+      .logo-stack {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .brand-mark {
+        display: block;
+        width: 109px;
+        height: auto;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 16px;
+        line-height: 20px;
+        font-weight: 400;
+        letter-spacing: 0.15px;
+        color: var(--color-text-primary);
+      }
+
+      .captcha-section {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .captcha-block {
+        width: 100%;
+      }
+
+      .captcha-placeholder {
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+        height: 148px;
+        background: #ffffff;
