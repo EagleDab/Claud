@@ -1,183 +1,44 @@
 """Parser implementation for whitehills.ru."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
+from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
-from typing import Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 from bs4 import BeautifulSoup
+
+from pricing.config import settings
 
 from .base import BaseParser, PriceNotFoundError, ProductSnapshot
 
 LOGGER = logging.getLogger(__name__)
 
-PRICE_TEXT_PATTERN = re.compile(r"\d[\d\s\xa0\u2009\u202F.,]*")
-NEGATIVE_CONTEXT_HINTS = (
-    "мин",
-    "макс",
-    "от ",
-    "до ",
-    "опт",
-    "wholesale",
-    "скид",
-    "discount",
-    "акци",
-    "sale",
-)
-PRICE_PATH_KEYWORDS = ("price", "prices", "cost", "amount", "sum")
-FAVOURABLE_PATH_HINTS = (
-    "price",
-    "current",
-    "value",
-    "default",
-    "base",
-    "retail",
-    "regular",
-)
-NEGATIVE_PATH_HINTS = (
-    "old",
-    "previous",
-    "discount",
-    "sale",
-    "strike",
-    "compare",
-    "min",
-    "max",
-    "from",
-    "opt",
-    "bulk",
-    "wholesale",
+THIN_SPACES = ("\xa0", "\u2009", "\u202F")
+PRICE_JSON_KEYS = {"price", "price_value", "current", "value", "amount"}
+XHR_KEYWORDS = ("price", "catalog", "product", "offer")
+DOM_SELECTORS = (
+    "span.price_value",
+    ".values_wrapper .price_value",
+    "[itemprop='offers'] [itemprop='price']",
 )
 
 
-def _parse_decimal_value(value: str) -> Decimal:
-    if value is None:
-        raise PriceNotFoundError("Price text is empty")
+def to_decimal(text: str) -> Decimal:
+    t = (text or "")
+    for sp in THIN_SPACES:
+        t = t.replace(sp, " ")
+    t = re.sub(r"[^\d.,\s]", "", t)
+    t = re.sub(r"\s+", "", t).replace(",", ".")
+    match = re.search(r"\d+(?:\.\d{1,2})?", t)
+    if not match:
+        raise ValueError(f"no numeric in: {text!r}")
+    return Decimal(match.group(0))
 
-    normalized = (
-        value.replace("\xa0", " ")
-        .replace("\u2009", " ")
-        .replace("\u202F", " ")
-    )
-    normalized = normalized.replace(" ", "")
-    normalized = re.sub(r"[^0-9,\.]+", "", normalized)
-    normalized = normalized.replace(",", ".")
-
-    if normalized.count(".") > 1:
-        parts = normalized.split(".")
-        integer_part = "".join(parts[:-1])
-        fractional = parts[-1]
-        normalized = f"{integer_part}.{fractional}" if fractional else integer_part
-
-    if not normalized:
-        raise PriceNotFoundError("Price text is empty")
-
-    try:
-        return Decimal(normalized)
-    except (InvalidOperation, ValueError) as exc:
-        raise PriceNotFoundError(f"Cannot convert price value: {value!r}") from exc
-
-
-def _extract_price_from_text(text: str) -> Optional[Decimal]:
-    if not text:
-        return None
-
-    normalized_text = (
-        text.replace("\xa0", " ")
-        .replace("\u2009", " ")
-        .replace("\u202F", " ")
-    )
-
-    matches: List[Tuple[int, int, Decimal]] = []
-    for match in PRICE_TEXT_PATTERN.finditer(normalized_text):
-        candidate = match.group()
-        try:
-            price = _parse_decimal_value(candidate)
-        except PriceNotFoundError:
-            continue
-
-        context_start = max(0, match.start() - 40)
-        context_end = min(len(normalized_text), match.end() + 40)
-        context_slice = normalized_text[context_start:context_end]
-        context_lower = context_slice.lower()
-
-        priority = 1
-        if any(hint in context_lower for hint in NEGATIVE_CONTEXT_HINTS):
-            priority += 1
-
-        currency_bonus = -1 if ("₽" in context_slice or "руб" in context_lower or "rub" in context_lower or "rur" in context_lower) else 0
-        matches.append((priority, currency_bonus, price))
-
-    if not matches:
-        return None
-
-    matches.sort(key=lambda item: (item[0], item[1]))
-    return matches[0][2]
-
-
-def _iter_price_value_paths(data: object, path: Tuple[str, ...] = ()) -> Iterator[Tuple[Tuple[str, ...], object]]:
-    if isinstance(data, dict):
-        for key, value in data.items():
-            key_str = str(key)
-            new_path = path + (key_str,)
-            yield from _iter_price_value_paths(value, new_path)
-    elif isinstance(data, list):
-        for item in data:
-            yield from _iter_price_value_paths(item, path)
-    elif isinstance(data, (int, float, Decimal)) and not isinstance(data, bool):
-        yield path, data
-    elif isinstance(data, str):
-        yield path, data
-
-
-def _contains_any(segment: str, needles: Sequence[str]) -> bool:
-    lowered = segment.lower()
-    return any(needle in lowered for needle in needles)
-
-
-def _score_price_path(path: Sequence[str]) -> Optional[int]:
-    lowered_path = [segment.lower() for segment in path if segment]
-    if not lowered_path:
-        return None
-
-    if not any(_contains_any(segment, PRICE_PATH_KEYWORDS) for segment in lowered_path):
-        return None
-
-    score = 2
-    if any(_contains_any(segment, FAVOURABLE_PATH_HINTS) for segment in lowered_path):
-        score = 0
-    elif any("current" in segment for segment in lowered_path):
-        score = 1
-
-    if any(_contains_any(segment, NEGATIVE_PATH_HINTS) for segment in lowered_path):
-        score += 1
-
-    return max(score, 0)
-
-
-def _collect_price_candidates(data: object) -> List[Tuple[int, int, str, Decimal]]:
-    candidates: List[Tuple[int, int, str, Decimal]] = []
-    for path, raw_value in _iter_price_value_paths(data):
-        if not path:
-            continue
-        if isinstance(raw_value, str) and not any(char.isdigit() for char in raw_value):
-            continue
-        try:
-            price = _parse_decimal_value(str(raw_value))
-        except PriceNotFoundError:
-            continue
-
-        score = _score_price_path(path)
-        if score is None:
-            continue
-
-        label = ".".join(path)
-        candidates.append((score, len(path), label, price))
-
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-    return candidates
 
 class WhiteHillsParser(BaseParser):
     """Parser for WhiteHills store."""
@@ -186,7 +47,13 @@ class WhiteHillsParser(BaseParser):
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
 
-        jsonld_product = self._extract_jsonld_product(soup, url)
+        jsonld_product = self._find_jsonld_product(soup)
+        price = self._parse_price_from_soup(soup, url=url, jsonld_product=jsonld_product)
+        if price is None:
+            price = await self.fetch_price_via_playwright(url)
+        if price is None:
+            LOGGER.warning("WhiteHills price not found", extra={"url": url})
+            raise PriceNotFoundError("Price not found on WhiteHills product page")
 
         title: Optional[str] = None
         sku: Optional[str] = None
@@ -197,8 +64,6 @@ class WhiteHillsParser(BaseParser):
             sku = jsonld_product.get("sku") or jsonld_product.get("mpn") or sku
             if variant_key is None:
                 variant_key = jsonld_product.get("variant")
-
-        price = self._extract_price(soup, url, jsonld_product=jsonld_product)
 
         if not title:
             header = soup.select_one("h1")
@@ -215,12 +80,16 @@ class WhiteHillsParser(BaseParser):
 
     def parse_price(self, html: str, url: str | None = None) -> Decimal:
         soup = BeautifulSoup(html, "lxml")
-        return self._extract_price(soup, url)
+        price = self._parse_price_from_soup(soup, url=url)
+        if price is None:
+            LOGGER.warning("WhiteHills price not found", extra={"url": url})
+            raise PriceNotFoundError("Price not found on WhiteHills product page")
+        return price
 
-    async def fetch_category(self, url: str) -> List[ProductSnapshot]:
+    async def fetch_category(self, url: str) -> list[ProductSnapshot]:
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
-        items: List[ProductSnapshot] = []
+        items: list[ProductSnapshot] = []
         for card in soup.select(".collection__item, .products-list__item"):
             link = card.select_one("a")
             price_node = card.select_one(".price, .product__price")
@@ -243,158 +112,179 @@ class WhiteHillsParser(BaseParser):
             )
         return items
 
+    async def fetch_price_via_playwright(self, url: str) -> Decimal | None:
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as exc:  # pragma: no cover - optional dependency
+            LOGGER.info("whitehills: Playwright unavailable: %s", exc, extra={"url": url})
+            return None
+
+        headers = self._build_headers().copy()
+        headers.pop("User-Agent", None)
+        price_holder: dict[str, Decimal | None] = {"value": None}
+
+        async def extract_from_response(response) -> None:
+            if price_holder["value"] is not None:
+                return
+            content_type = (response.headers.get("content-type") or "").lower()
+            if "application/json" not in content_type:
+                return
+            url_lower = response.url.lower()
+            if not any(keyword in url_lower for keyword in XHR_KEYWORDS):
+                return
+            try:
+                data = await response.json()
+            except Exception:
+                return
+            raw_value = self._extract_price_from_json(data)
+            if raw_value is None:
+                return
+            try:
+                price_holder["value"] = to_decimal(str(raw_value))
+                LOGGER.info("whitehills: price via xhr = %s", price_holder["value"])
+            except (InvalidOperation, ValueError):
+                price_holder["value"] = None
+
+        try:  # pragma: no cover - requires browser
+            async with async_playwright() as playwright_ctx:
+                launch_args = (os.environ.get("PW_LAUNCH_ARGS") or "").split()
+                browser = await playwright_ctx.chromium.launch(
+                    headless=settings.playwright_headless,
+                    slow_mo=settings.playwright_slow_mo,
+                    args=launch_args or None,
+                )
+                context = None
+                try:
+                    context = await browser.new_context(
+                        user_agent=self._choose_user_agent(),
+                        extra_http_headers=headers,
+                    )
+                    page = await context.new_page()
+                    page.on(
+                        "response",
+                        lambda response: asyncio.create_task(extract_from_response(response)),
+                    )
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+                    wait_tasks = [
+                        asyncio.create_task(page.wait_for_load_state("networkidle", timeout=8000)),
+                        asyncio.create_task(page.wait_for_selector("span.price_value", timeout=6000)),
+                    ]
+                    for task in wait_tasks:
+                        try:
+                            await task
+                        except Exception:
+                            pass
+
+                    if price_holder["value"] is None:
+                        dom_text = await page.evaluate(
+                            r"""
+                            () => {
+                              const pick = sel => { const el = document.querySelector(sel); return el && el.textContent; };
+                              const candidates = [
+                                "span.price_value",
+                                ".values_wrapper .price_value",
+                                "[itemprop='offers'] [itemprop='price']",
+                                "[class*='price']"
+                              ];
+                              for (const s of candidates) {
+                                const t = pick(s);
+                                if (t && /\d/.test(t)) return t;
+                              }
+                              const meta = document.querySelector('meta[itemprop="price"]');
+                              if (meta && meta.content) return meta.content;
+                              for (const sc of document.scripts) {
+                                const txt = sc.textContent || "";
+                                const m = txt.match(/"(?:price|currentPrice|amount|value)"\s*:\s*"?(\d+(?:[.,]\d{1,2})?)"?/);
+                                if (m) return m[1];
+                              }
+                              return null;
+                            }
+                            """
+                        )
+                        if isinstance(dom_text, str):
+                            try:
+                                price_holder["value"] = to_decimal(dom_text)
+                                LOGGER.info("whitehills: price via dom = %s", price_holder["value"])
+                            except (InvalidOperation, ValueError):
+                                price_holder["value"] = None
+                finally:
+                    if context is not None:
+                        await context.close()
+                    await browser.close()
+        except Exception as exc:  # pragma: no cover - Playwright environment dependent
+            LOGGER.info("whitehills: Playwright price fetch failed: %s", exc, extra={"url": url})
+            return price_holder["value"]
+
+        return price_holder["value"]
+
     # ------------------------------------------------------------------
-    def _extract_price(
+    def _parse_price_from_soup(
         self,
         soup: BeautifulSoup,
-        url: str | None,
         *,
-        jsonld_product: Optional[dict] = None,
-    ) -> Decimal:
-        product_data = jsonld_product or self._extract_jsonld_product(soup, url)
-        if product_data:
-            price = self._price_from_jsonld(product_data, url)
+        url: str | None = None,
+        jsonld_product: Optional[dict[str, Any]] = None,
+    ) -> Decimal | None:
+        product = jsonld_product or self._find_jsonld_product(soup)
+        if product:
+            price = self._price_from_jsonld_product(product)
             if price is not None:
+                LOGGER.info("whitehills: price via jsonld = %s", price)
                 return price
+        price = self._price_from_static_dom(soup)
+        return price
 
-        element = soup.select_one("span.price_value")
-        if element:
-            text = element.get_text(" ", strip=True)
-            price = _extract_price_from_text(text)
-            if price is not None:
-                LOGGER.info("WhiteHills: price via span.price_value = %s", price)
-                return price
-            LOGGER.debug("WhiteHills span.price_value invalid", extra={"url": url})
-
-        meta = soup.select_one("meta[itemprop='price'][content]")
-        if meta:
-            content = meta.get("content")
-            if content:
-                price = _extract_price_from_text(content)
-                if price is not None:
-                    LOGGER.info("WhiteHills: price via meta[itemprop='price'] = %s", price)
-                    return price
-                LOGGER.debug("WhiteHills meta price invalid", extra={"url": url})
-
-        attribute_price = self._price_from_data_attributes(soup, url)
-        if attribute_price is not None:
-            return attribute_price
-
-        script_price = self._price_from_scripts(soup)
-        if script_price is not None:
-            return script_price
-
-        for selector in ("[itemprop='offers'] [itemprop='price']", "[class*='price']"):
-            for node in soup.select(selector):
-                text = node.get("content") or node.get_text(" ", strip=True)
-                price = _extract_price_from_text(text)
-                if price is None:
-                    continue
-                if selector == "[itemprop='offers'] [itemprop='price']":
-                    LOGGER.info("WhiteHills: price via itemprop offers price = %s", price)
-                else:
-                    LOGGER.info("WhiteHills: price via class*='price' = %s", price)
-                return price
-
-        LOGGER.warning("WhiteHills price not found", extra={"url": url})
-        raise PriceNotFoundError("Price not found on WhiteHills product page")
-
-    def _extract_jsonld_product(self, soup: BeautifulSoup, url: str | None) -> Optional[dict]:
-        scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
-        for script in scripts:
+    def _find_jsonld_product(self, soup: BeautifulSoup) -> Optional[dict[str, Any]]:
+        for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
             text = script.string or script.text or ""
             if not text.strip():
                 continue
             try:
                 data = json.loads(text)
             except json.JSONDecodeError:
-                LOGGER.debug("WhiteHills JSON-LD decode failed", extra={"url": url})
                 continue
             for candidate in self._iter_dicts(data):
                 if self._is_product_type(candidate.get("@type")):
                     return candidate
         return None
 
-    def _price_from_jsonld(self, product: dict, url: str | None) -> Optional[Decimal]:
-        sources: List[Tuple[object, str]] = []
+    def _price_from_jsonld_product(self, product: dict[str, Any]) -> Decimal | None:
         offers = product.get("offers")
-        if isinstance(offers, (dict, list)):
-            sources.append((offers, "JSON-LD offers"))
-        sources.append((product, "JSON-LD"))
+        offer: dict[str, Any] | None
+        if isinstance(offers, list):
+            offer = next((item for item in offers if isinstance(item, dict)), None)
+        elif isinstance(offers, dict):
+            offer = offers
+        else:
+            offer = None
+        if not offer:
+            return None
+        price_value = offer.get("price")
+        if price_value is None:
+            return None
+        try:
+            return to_decimal(str(price_value))
+        except (InvalidOperation, ValueError):
+            return None
 
-        for data, prefix in sources:
-            candidates = _collect_price_candidates(data)
-            if not candidates:
+    def _price_from_static_dom(self, soup: BeautifulSoup) -> Decimal | None:
+        for selector in DOM_SELECTORS:
+            element = soup.select_one(selector)
+            if not element:
                 continue
-            _, _, label, price = candidates[0]
-            label = label or "price"
-            LOGGER.info("WhiteHills: price via %s.%s = %s", prefix, label, price)
-            return price
-        LOGGER.debug("WhiteHills JSON-LD price not found", extra={"url": url})
-        return None
-
-    def _price_from_scripts(self, soup: BeautifulSoup) -> Optional[Decimal]:
-        for script in soup.find_all("script"):
-            text = script.string or script.text or ""
-            if not text.strip():
+            text = element.get_text(" ", strip=True)
+            if not text:
                 continue
             try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
+                price = to_decimal(text)
+            except (InvalidOperation, ValueError):
                 continue
-
-            candidates = _collect_price_candidates(data)
-            if candidates:
-                _, _, label, price = candidates[0]
-                LOGGER.info("WhiteHills: price via inline script %s = %s", label or "price", price)
-                return price
-        return None
-
-    def _price_from_data_attributes(self, soup: BeautifulSoup, url: str | None) -> Optional[Decimal]:
-        best: Optional[Tuple[int, Decimal, str]] = None
-        for element in soup.find_all(True):
-            attrs = getattr(element, "attrs", {})
-            for attr, raw_value in attrs.items():
-                if not isinstance(attr, str):
-                    continue
-                attr_lower = attr.lower()
-                if attr_lower in {"class", "style"}:
-                    continue
-                if not attr_lower.startswith("data"):
-                    continue
-                if not any(keyword in attr_lower for keyword in ("price", "cost")):
-                    continue
-
-                values: Sequence[str]
-                if isinstance(raw_value, (list, tuple)):
-                    values = [str(item) for item in raw_value if item is not None]
-                elif raw_value is None:
-                    continue
-                else:
-                    values = [str(raw_value)]
-
-                for value in values:
-                    candidate = _extract_price_from_text(f"{attr_lower} {value}")
-                    if candidate is None:
-                        continue
-
-                    priority = 1
-                    if any(token in attr_lower for token in ("retail", "regular", "default", "base")):
-                        priority = 0
-                    elif any(token in attr_lower for token in ("min", "max", "old", "previous", "discount")):
-                        priority = 3
-
-                    current = (priority, candidate, attr_lower)
-                    if best is None or current < best:
-                        best = current
-
-        if best is not None:
-            _, price, attr_name = best
-            LOGGER.info("WhiteHills: price via data attribute %s = %s", attr_name, price)
+            LOGGER.info("whitehills: price via dom = %s", price)
             return price
         return None
 
-    def _iter_dicts(self, data: object) -> Iterator[dict]:
+    def _iter_dicts(self, data: Any) -> Iterable[dict[str, Any]]:
         if isinstance(data, dict):
             yield data
             for value in data.values():
@@ -403,12 +293,26 @@ class WhiteHillsParser(BaseParser):
             for item in data:
                 yield from self._iter_dicts(item)
 
-    def _is_product_type(self, value: object) -> bool:
+    def _is_product_type(self, value: Any) -> bool:
         if isinstance(value, str):
             return value.lower() == "product"
         if isinstance(value, Iterable):
             return any(isinstance(item, str) and item.lower() == "product" for item in value)
         return False
+
+    def _extract_price_from_json(self, data: Any) -> Any:
+        stack = [data]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if isinstance(key, str) and key.lower() in PRICE_JSON_KEYS:
+                        if isinstance(value, (str, int, float)):
+                            return value
+                    stack.append(value)
+            elif isinstance(current, list):
+                stack.extend(current)
+        return None
 
 
 __all__ = ["WhiteHillsParser"]
