@@ -167,7 +167,7 @@ class WhiteHillsParser(BaseParser):
                                 elif isinstance(offers, dict):
                                     offer_items = [offers]
                                 for offer in offer_items:
-                                    for key in ("price", "priceValue", "lowPrice", "highPrice", "currentPrice", "value", "amount"):
+                                    for key in ("price", "price_value", "priceValue", "lowPrice", "highPrice", "currentPrice", "value", "amount"):
                                         if key in offer:
                                             try:
                                                 price_dec = self._to_decimal(str(offer[key]))
