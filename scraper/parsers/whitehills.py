@@ -25,6 +25,17 @@ _PLAYWRIGHT_WAIT_SELECTORS = (
     ".values_wrapper .price_value",
     "[itemprop='offers'] [itemprop='price']",
 )
+_PRICE_JSON_KEYS = {
+    "price",
+    "price_value",
+    "priceValue",
+    "current",
+    "currentPrice",
+    "value",
+    "amount",
+    "lowPrice",
+    "highPrice",
+}
 
 def to_decimal(text: str) -> Decimal:
     t = (text or "")
@@ -126,6 +137,55 @@ class WhiteHillsParser(BaseParser):
         result: Decimal | None = None
         browser = None
         context = None
+        page = None
+        price_candidates: list[str] = []
+
+        def _capture_price_candidate(value: Any) -> bool:
+            text = None
+            if isinstance(value, (int, float, Decimal)):
+                text = str(value)
+            elif isinstance(value, str):
+                text = value
+            if text and any(char.isdigit() for char in text):
+                price_candidates.append(text)
+                return True
+            return False
+
+        def _scan_json(data: Any) -> bool:
+            if isinstance(data, dict):
+                for key, val in data.items():
+                    if key in _PRICE_JSON_KEYS and _capture_price_candidate(val):
+                        return True
+                    if _scan_json(val):
+                        return True
+            elif isinstance(data, list):
+                for item in data:
+                    if _scan_json(item):
+                        return True
+            return False
+
+        async def _handle_response(response: Any) -> None:
+            if price_candidates:
+                return
+            try:
+                url_lower = response.url.lower()
+            except Exception:
+                return
+            if not any(token in url_lower for token in ("price", "catalog", "product", "offer")):
+                return
+            try:
+                headers = response.headers
+            except Exception:
+                headers = {}
+            content_type = "" if headers is None else headers.get("content-type", "")
+            if "application/json" not in (content_type or ""):
+                return
+            try:
+                payload = await response.json()
+            except Exception:
+                return
+            _scan_json(payload)
+
         try:  # pragma: no cover - requires browser
             async with async_playwright() as playwright_ctx:
                 launch_args = shlex.split(os.environ.get("PW_LAUNCH_ARGS", ""))
@@ -142,7 +202,25 @@ class WhiteHillsParser(BaseParser):
                 )
 
                 page = await context.new_page()
+                page.on("response", _handle_response)
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=12000)
+                except PlaywrightTimeoutError:
+                    pass
+
+                if price_candidates:
+                    try:
+                        result = to_decimal(price_candidates[0])
+                        LOGGER.info(
+                            "whitehills: price via playwright-xhr = %s",
+                            result,
+                            extra={"url": url},
+                        )
+                        return result
+                    except ValueError:
+                        price_candidates.clear()
 
                 selector_union = ", ".join(_PLAYWRIGHT_WAIT_SELECTORS)
                 try:
@@ -161,17 +239,19 @@ class WhiteHillsParser(BaseParser):
                           for (const it of arr) {
                             if (!it) continue;
                             const type = it['@type'];
-                            if (type === 'Product' || (Array.isArray(type) && type.includes && type.includes('Product'))) {
+                            if (type === 'Product'
+                                || (typeof type === 'string' && type.toLowerCase().includes('product'))
+                                || (Array.isArray(type) && type.includes && type.includes('Product'))) {
                               const offers = it.offers;
                               if (!offers) continue;
                               if (Array.isArray(offers)) {
-                                const first = offers[0];
-                                if (first && (first.price || first.priceValue)) {
-                                  return String(first.price || first.priceValue);
+                                const first = offers.find(item => item && typeof item === 'object');
+                                if (first && (first.price || first.priceValue || first.lowPrice || first.currentPrice)) {
+                                  return String(first.price || first.priceValue || first.lowPrice || first.currentPrice);
                                 }
                               } else if (typeof offers === 'object') {
-                                if (offers.price || offers.priceValue) {
-                                  return String(offers.price || offers.priceValue);
+                                if (offers.price || offers.priceValue || offers.lowPrice || offers.currentPrice) {
+                                  return String(offers.price || offers.priceValue || offers.lowPrice || offers.currentPrice);
                                 }
                               }
                             }
@@ -214,6 +294,11 @@ class WhiteHillsParser(BaseParser):
                       }
                       const meta = document.querySelector('meta[itemprop="price"]');
                       if (meta && meta.content) return meta.content;
+                      for (const sc of document.scripts) {
+                        const txt = sc.textContent || "";
+                        const match = txt.match(/"(?:price|currentPrice|amount|value|priceValue)"\s*:\s*"?(\d+(?:[.,]\d{1,2})?)"?/);
+                        if (match) return match[1];
+                      }
                       return null;
                     }
                     """
@@ -330,6 +415,20 @@ class WhiteHillsParser(BaseParser):
                 continue
             try:
                 price = to_decimal(text)
+            except ValueError:
+                continue
+            LOGGER.info("whitehills: price via dom = %s", price, extra={"url": url})
+            return price
+
+        for script in soup.find_all("script"):
+            text = script.string or script.text or ""
+            if not text:
+                continue
+            match = re.search(r"\"(?:price|currentPrice|amount|value|priceValue)\"\s*:\s*\"?(\d+(?:[.,]\d{1,2})?)\"?", text)
+            if not match:
+                continue
+            try:
+                price = to_decimal(match.group(1))
             except ValueError:
                 continue
             LOGGER.info("whitehills: price via dom = %s", price, extra={"url": url})
