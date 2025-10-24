@@ -13,11 +13,104 @@ from bs4 import BeautifulSoup
 
 from pricing.config import settings
 
-from .base import BaseParser, PriceNotFoundError, ProductSnapshot
+from .base import BaseParser, PriceNotFoundError, ProductSnapshot, ScraperError
 
 LOGGER = logging.getLogger(__name__)
 
-_THIN = ("\xa0", "\u2009", "\u202F")
+_THIN_SPACES = ("\xa0", "\u2009", "\u202F")
+
+
+def _normalize_price_to_decimal(text: str) -> Decimal:
+    t = text or ""
+    t = re.sub(r"(руб\.?|₽)", "", t, flags=re.IGNORECASE)
+    for sp in _THIN_SPACES:
+        t = t.replace(sp, " ")
+    t = re.sub(r"\s+", "", t)
+    t = t.replace(",", ".")
+    match = re.search(r"\d+(?:\.\d+)?", t)
+    if not match:
+        raise ValueError(f"no number in: {text!r}")
+    return Decimal(match.group(0))
+
+
+async def _price_from_dom(page) -> Decimal | None:
+    try:
+        await page.wait_for_selector(
+            ".values_wrapper .price_value, .price_value",
+            state="visible",
+            timeout=10000,
+        )
+    except Exception:
+        return None
+
+    nodes = await page.query_selector_all(".values_wrapper .price_value, .price_value")
+    texts: list[str] = []
+    for element in nodes:
+        try:
+            if not await element.is_visible():
+                continue
+            text = (await element.inner_text()) or ""
+            text = text.strip()
+            if text:
+                texts.append(text)
+        except Exception:
+            continue
+
+    if not texts:
+        return None
+
+    try:
+        return _normalize_price_to_decimal(texts[-1])
+    except Exception:
+        pass
+
+    decimals: list[Decimal] = []
+    for candidate in texts:
+        try:
+            decimals.append(_normalize_price_to_decimal(candidate))
+        except Exception:
+            continue
+
+    return max(decimals) if decimals else None
+
+
+def _price_from_jsonld_strings(json_texts: list[str]) -> Decimal | None:
+    for raw in json_texts:
+        data_str = (raw or "").strip()
+        if not data_str:
+            continue
+        try:
+            data = json.loads(data_str)
+        except Exception:
+            continue
+
+        candidates = data if isinstance(data, list) else [data]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+
+            offers = None
+            if candidate.get("@type") == "Product":
+                offers = candidate.get("offers")
+            elif "offers" in candidate:
+                offers = candidate["offers"]
+
+            if not offers:
+                continue
+
+            offer_items = offers if isinstance(offers, list) else [offers]
+            for offer in offer_items:
+                if not isinstance(offer, dict):
+                    continue
+                price_value = offer.get("price")
+                if price_value is None:
+                    continue
+                try:
+                    return _normalize_price_to_decimal(str(price_value))
+                except Exception:
+                    continue
+
+    return None
 
 
 class WhiteHillsParser(BaseParser):
@@ -29,197 +122,92 @@ class WhiteHillsParser(BaseParser):
 
     @staticmethod
     def _to_decimal(text: str) -> Decimal:
-        t = text or ""
-        for sp in _THIN:
-            t = t.replace(sp, " ")
-        t = re.sub(r"[^\d.,\s]", "", t)
-        t = re.sub(r"\s+", "", t).replace(",", ".")
-        match = re.search(r"\d+(?:\.\d{1,2})?", t)
-        if not match:
-            raise ValueError(f"no numeric in: {text!r}")
-        return Decimal(match.group(0))
-
-    async def _extract_visible_price_value(self, page) -> Decimal | None:
-        await page.wait_for_load_state("domcontentloaded")
-        try:
-            await page.wait_for_function(
-                r"""
-                () => {
-                  const els = Array.from(document.querySelectorAll('span.price_value'));
-                  const visible = els.filter(e => {
-                    const s = window.getComputedStyle(e);
-                    const rect = e.getBoundingClientRect();
-                    return s && s.display !== 'none' && s.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && e.offsetParent !== null;
-                  });
-                  if (!visible.length) return false;
-                  const text = visible.map(e => e.textContent || '').join(' ');
-                  return /\d/.test(text);
-                }
-                """,
-                timeout=10000,
-            )
-        except Exception:
-            return None
-
-        txt = await page.evaluate(
-            r"""
-            () => {
-              const els = Array.from(document.querySelectorAll('span.price_value'));
-              const visible = els.filter(e => {
-                const s = window.getComputedStyle(e);
-                const r = e.getBoundingClientRect();
-                return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0 && e.offsetParent !== null;
-              });
-              const texts = visible.map(e => (e.textContent || '').trim()).filter(t => /\d/.test(t));
-              return texts.join(' | ');
-            }
-            """,
-        )
-        if not txt:
-            return None
-
-        try:
-            candidate = txt.split(" | ").pop()
-            return self._to_decimal(candidate)
-        except Exception:
-            parts = txt.split(" | ")
-            nums: list[Decimal] = []
-            for part in parts:
-                try:
-                    nums.append(self._to_decimal(part))
-                except Exception:
-                    continue
-            return max(nums) if nums else None
+        return _normalize_price_to_decimal(text)
 
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
-        price_dec: Decimal | None = None
+        price: Decimal | None = None
 
-        try:  # pragma: no cover - optional dependency
-            from playwright.async_api import async_playwright  # type: ignore import-not-found
+        settings_obj = getattr(self, "settings", settings)
+
+        try:  # pragma: no cover - requires Playwright
+            from playwright.async_api import async_playwright
         except Exception as exc:  # pragma: no cover - optional dependency
-            self.logger.info("whitehills: playwright extract error: %s", exc)
-        else:  # pragma: no cover - requires browser
-            browser = None
-            context = None
-            page = None
+            self.logger.info("whitehills: playwright error: %s", exc)
+        else:
             try:
-                async with async_playwright() as p:
+                async with async_playwright() as playwright_ctx:
                     launch_args = (os.environ.get("PW_LAUNCH_ARGS") or "").split()
-                    browser = await p.chromium.launch(
-                        headless=getattr(settings, "playwright_headless", True),
-                        slow_mo=getattr(settings, "playwright_slow_mo", 0),
+                    browser = await playwright_ctx.chromium.launch(
+                        headless=getattr(settings_obj, "playwright_headless", True),
+                        slow_mo=getattr(settings_obj, "playwright_slow_mo", 0),
                         args=launch_args or None,
                     )
-                    context = await browser.new_context(
-                        timezone_id=os.environ.get("PLAYWRIGHT_TZ", "Europe/Moscow"),
-                        locale="ru-RU",
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-                    )
-
-                    async def _skip_heavy(route):
-                        if route.request.resource_type in {"image", "font"}:
-                            await route.abort()
-                        else:
-                            await route.continue_()
-
-                    await context.route("**/*", _skip_heavy)
-                    page = await context.new_page()
-                    await page.goto(url, wait_until="networkidle", timeout=30000)
                     try:
-                        await page.wait_for_timeout(800)
-                    except Exception:
-                        pass
-
-                    price_dec = await self._extract_visible_price_value(page)
-
-                    if price_dec is None:
+                        context = await browser.new_context(
+                            locale="ru-RU",
+                            timezone_id=os.environ.get("PLAYWRIGHT_TZ", "Europe/Moscow"),
+                            user_agent=(
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/124.0 Safari/537.36"
+                            ),
+                        )
                         try:
+                            async def _route_handler(route):
+                                if route.request.resource_type in {"image", "font"}:
+                                    await route.abort()
+                                else:
+                                    await route.continue_()
+
+                            await context.route("**/*", _route_handler)
+                            page = await context.new_page()
+                            await page.goto(url, wait_until="networkidle", timeout=30000)
+                            await page.wait_for_timeout(500)
+
+                            price = await _price_from_dom(page)
+                            if price is not None:
+                                self.logger.info("whitehills: price via playwright = %s", price)
+                                return ProductSnapshot(
+                                    url=url,
+                                    price=price,
+                                    currency="RUB",
+                                    title=None,
+                                    sku=None,
+                                    variant_key=variant,
+                                )
+
                             json_texts = await page.evaluate(
                                 """
-                                () => Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map(s => s.textContent || '')
-                                """,
+                                () => Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+                                      .map(s => s.textContent || '')
+                                """
                             )
-                        except Exception:
-                            json_texts = []
-                        for jt in json_texts or []:
-                            if not jt:
-                                continue
-                            try:
-                                data = json.loads(jt)
-                            except Exception:
-                                continue
-                            items = data if isinstance(data, list) else [data]
-                            for item in items:
-                                if not isinstance(item, dict):
-                                    continue
-                                type_value = item.get("@type")
-                                type_list: list[str] = []
-                                if isinstance(type_value, str):
-                                    type_list = [type_value]
-                                elif isinstance(type_value, list):
-                                    type_list = [t for t in type_value if isinstance(t, str)]
-                                if type_list and not any("product" in t.lower() for t in type_list):
-                                    continue
-                                offers = item.get("offers")
-                                offer_items: list[dict[str, Any]] = []
-                                if isinstance(offers, list):
-                                    offer_items = [o for o in offers if isinstance(o, dict)]
-                                elif isinstance(offers, dict):
-                                    offer_items = [offers]
-                                for offer in offer_items:
-                                    for key in ("price", "price_value", "priceValue", "lowPrice", "highPrice", "currentPrice", "value", "amount"):
-                                        if key in offer:
-                                            try:
-                                                price_dec = self._to_decimal(str(offer[key]))
-                                                break
-                                            except Exception:
-                                                continue
-                                    if price_dec is not None:
-                                        break
-                                if price_dec is not None:
-                                    break
-                            if price_dec is not None:
-                                break
-            except Exception as exc:
-                self.logger.info("whitehills: playwright extract error: %s", exc)
-            finally:
-                if page is not None:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-                if context is not None:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
-                if browser is not None:
-                    try:
+                            price = _price_from_jsonld_strings(json_texts)
+                            if price is not None:
+                                self.logger.info("whitehills: price via jsonld = %s", price)
+                                return ProductSnapshot(
+                                    url=url,
+                                    price=price,
+                                    currency="RUB",
+                                    title=None,
+                                    sku=None,
+                                    variant_key=variant,
+                                )
+                        finally:
+                            await context.close()
+                    finally:
                         await browser.close()
-                    except Exception:
-                        pass
-
-        if price_dec is not None:
-            self.logger.info("whitehills: price via playwright-dom = %s", price_dec)
-            return ProductSnapshot(
-                url=url,
-                price=price_dec,
-                currency="RUB",
-                title=None,
-                sku=None,
-                variant_key=variant,
-            )
-
-        self.logger.info("whitehills: playwright extract returned None")
+            except Exception as exc:  # pragma: no cover - network/browser issues
+                self.logger.info("whitehills: playwright error: %s", exc)
 
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
         jsonld_product = self._find_jsonld_product(soup)
 
-        price_dec = self._parse_price_from_soup(soup, url=url, jsonld_product=jsonld_product)
-        if price_dec is None:
-            self.logger.warning("WhiteHills price not found", extra={"url": url})
-            raise PriceNotFoundError("Price not found on WhiteHills product page")
+        price = self._parse_price_from_soup(soup, url=url, jsonld_product=jsonld_product)
+        if price is None:
+            self.logger.warning("whitehills: price not found", extra={"url": url})
+            raise ScraperError("Price not found on WhiteHills product page")
 
         title: Optional[str] = None
         sku: Optional[str] = None
@@ -235,10 +223,10 @@ class WhiteHillsParser(BaseParser):
             header = soup.select_one("h1")
             title = header.get_text(strip=True) if header else None
 
-        self.logger.info("whitehills: price via static = %s", price_dec)
+        self.logger.info("whitehills: price via static = %s", price)
         return ProductSnapshot(
             url=url,
-            price=price_dec,
+            price=price,
             currency="RUB",
             title=title,
             sku=sku,
