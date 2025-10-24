@@ -1,6 +1,7 @@
 """Parser implementation for whitehills.ru."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -350,6 +351,20 @@ class WhiteHillsParser(BaseParser):
         if isinstance(value, Iterable):
             return any(isinstance(item, str) and item.lower() == "product" for item in value)
         return False
+
+    def _extract_price_from_json(self, data: Any) -> Any:
+        stack = [data]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if isinstance(key, str) and key.lower() in PRICE_JSON_KEYS:
+                        if isinstance(value, (str, int, float)):
+                            return value
+                    stack.append(value)
+            elif isinstance(current, list):
+                stack.extend(current)
+        return None
 
 
 __all__ = ["WhiteHillsParser"]
