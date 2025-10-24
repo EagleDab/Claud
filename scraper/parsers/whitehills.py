@@ -6,8 +6,9 @@ import json
 import logging
 import os
 import re
+import shlex
 from collections.abc import Iterable
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Optional
 
 from bs4 import BeautifulSoup
@@ -18,19 +19,16 @@ from .base import BaseParser, PriceNotFoundError, ProductSnapshot
 
 LOGGER = logging.getLogger(__name__)
 
-THIN_SPACES = ("\xa0", "\u2009", "\u202F")
-PRICE_JSON_KEYS = {"price", "price_value", "current", "value", "amount"}
-XHR_KEYWORDS = ("price", "catalog", "product", "offer")
-DOM_SELECTORS = (
+_THIN = ("\xa0", "\u2009", "\u202F")
+_PLAYWRIGHT_WAIT_SELECTORS = (
     "span.price_value",
     ".values_wrapper .price_value",
     "[itemprop='offers'] [itemprop='price']",
 )
 
-
 def to_decimal(text: str) -> Decimal:
     t = (text or "")
-    for sp in THIN_SPACES:
+    for sp in _THIN:
         t = t.replace(sp, " ")
     t = re.sub(r"[^\d.,\s]", "", t)
     t = re.sub(r"\s+", "", t).replace(",", ".")
@@ -44,16 +42,17 @@ class WhiteHillsParser(BaseParser):
     """Parser for WhiteHills store."""
 
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
+        price = await self._fetch_price_playwright(url)
+
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
-
         jsonld_product = self._find_jsonld_product(soup)
-        price = self._parse_price_from_soup(soup, url=url, jsonld_product=jsonld_product)
+
         if price is None:
-            price = await self.fetch_price_via_playwright(url)
-        if price is None:
-            LOGGER.warning("WhiteHills price not found", extra={"url": url})
-            raise PriceNotFoundError("Price not found on WhiteHills product page")
+            price = self._parse_price_from_soup(soup, url=url, jsonld_product=jsonld_product)
+            if price is None:
+                LOGGER.warning("WhiteHills price not found", extra={"url": url})
+                raise PriceNotFoundError("Price not found on WhiteHills product page")
 
         title: Optional[str] = None
         sku: Optional[str] = None
@@ -112,111 +111,141 @@ class WhiteHillsParser(BaseParser):
             )
         return items
 
-    async def fetch_price_via_playwright(self, url: str) -> Decimal | None:
-        try:
-            from playwright.async_api import async_playwright
-        except Exception as exc:  # pragma: no cover - optional dependency
-            LOGGER.info("whitehills: Playwright unavailable: %s", exc, extra={"url": url})
+    async def _fetch_price_playwright(self, url: str) -> Decimal | None:
+        """Return price extracted with Playwright or ``None`` when unavailable."""
+
+        try:  # pragma: no cover - optional dependency
+            from playwright.async_api import (  # type: ignore import-not-found
+                TimeoutError as PlaywrightTimeoutError,
+                async_playwright,
+            )
+        except Exception:
+            LOGGER.info("whitehills: playwright extract returned None", extra={"url": url})
             return None
 
-        headers = self._build_headers().copy()
-        headers.pop("User-Agent", None)
-        price_holder: dict[str, Decimal | None] = {"value": None}
-
-        async def extract_from_response(response) -> None:
-            if price_holder["value"] is not None:
-                return
-            content_type = (response.headers.get("content-type") or "").lower()
-            if "application/json" not in content_type:
-                return
-            url_lower = response.url.lower()
-            if not any(keyword in url_lower for keyword in XHR_KEYWORDS):
-                return
-            try:
-                data = await response.json()
-            except Exception:
-                return
-            raw_value = self._extract_price_from_json(data)
-            if raw_value is None:
-                return
-            try:
-                price_holder["value"] = to_decimal(str(raw_value))
-                LOGGER.info("whitehills: price via xhr = %s", price_holder["value"])
-            except (InvalidOperation, ValueError):
-                price_holder["value"] = None
-
+        result: Decimal | None = None
+        browser = None
+        context = None
         try:  # pragma: no cover - requires browser
             async with async_playwright() as playwright_ctx:
-                launch_args = (os.environ.get("PW_LAUNCH_ARGS") or "").split()
+                launch_args = shlex.split(os.environ.get("PW_LAUNCH_ARGS", ""))
                 browser = await playwright_ctx.chromium.launch(
                     headless=settings.playwright_headless,
-                    slow_mo=settings.playwright_slow_mo,
                     args=launch_args or None,
                 )
-                context = None
+
+                headers = self._build_headers().copy()
+                user_agent = headers.pop("User-Agent", None) or self._choose_user_agent()
+                context = await browser.new_context(
+                    user_agent=user_agent,
+                    extra_http_headers=headers or None,
+                )
+
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+                selector_union = ", ".join(_PLAYWRIGHT_WAIT_SELECTORS)
                 try:
-                    context = await browser.new_context(
-                        user_agent=self._choose_user_agent(),
-                        extra_http_headers=headers,
-                    )
-                    page = await context.new_page()
-                    page.on(
-                        "response",
-                        lambda response: asyncio.create_task(extract_from_response(response)),
-                    )
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_selector(selector_union, timeout=12000)
+                except PlaywrightTimeoutError:
+                    pass
 
-                    wait_tasks = [
-                        asyncio.create_task(page.wait_for_load_state("networkidle", timeout=8000)),
-                        asyncio.create_task(page.wait_for_selector("span.price_value", timeout=6000)),
-                    ]
-                    for task in wait_tasks:
-                        try:
-                            await task
-                        except Exception:
-                            pass
-
-                    if price_holder["value"] is None:
-                        dom_text = await page.evaluate(
-                            r"""
-                            () => {
-                              const pick = sel => { const el = document.querySelector(sel); return el && el.textContent; };
-                              const candidates = [
-                                "span.price_value",
-                                ".values_wrapper .price_value",
-                                "[itemprop='offers'] [itemprop='price']",
-                                "[class*='price']"
-                              ];
-                              for (const s of candidates) {
-                                const t = pick(s);
-                                if (t && /\d/.test(t)) return t;
+                jsonld_text = await page.evaluate(
+                    r"""
+                    () => {
+                      const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+                      for (const s of scripts) {
+                        try {
+                          const parsed = JSON.parse(s.textContent || "{}");
+                          const arr = Array.isArray(parsed) ? parsed : [parsed];
+                          for (const it of arr) {
+                            if (!it) continue;
+                            const type = it['@type'];
+                            if (type === 'Product' || (Array.isArray(type) && type.includes && type.includes('Product'))) {
+                              const offers = it.offers;
+                              if (!offers) continue;
+                              if (Array.isArray(offers)) {
+                                const first = offers[0];
+                                if (first && (first.price || first.priceValue)) {
+                                  return String(first.price || first.priceValue);
+                                }
+                              } else if (typeof offers === 'object') {
+                                if (offers.price || offers.priceValue) {
+                                  return String(offers.price || offers.priceValue);
+                                }
                               }
-                              const meta = document.querySelector('meta[itemprop="price"]');
-                              if (meta && meta.content) return meta.content;
-                              for (const sc of document.scripts) {
-                                const txt = sc.textContent || "";
-                                const m = txt.match(/"(?:price|currentPrice|amount|value)"\s*:\s*"?(\d+(?:[.,]\d{1,2})?)"?/);
-                                if (m) return m[1];
-                              }
-                              return null;
                             }
-                            """
-                        )
-                        if isinstance(dom_text, str):
-                            try:
-                                price_holder["value"] = to_decimal(dom_text)
-                                LOGGER.info("whitehills: price via dom = %s", price_holder["value"])
-                            except (InvalidOperation, ValueError):
-                                price_holder["value"] = None
-                finally:
-                    if context is not None:
-                        await context.close()
-                    await browser.close()
-        except Exception as exc:  # pragma: no cover - Playwright environment dependent
-            LOGGER.info("whitehills: Playwright price fetch failed: %s", exc, extra={"url": url})
-            return price_holder["value"]
+                          }
+                        } catch (e) {}
+                      }
+                      return null;
+                    }
+                    """
+                )
 
-        return price_holder["value"]
+                if isinstance(jsonld_text, str) and jsonld_text.strip():
+                    try:
+                        result = to_decimal(jsonld_text)
+                        LOGGER.info(
+                            "whitehills: price via playwright-jsonld = %s",
+                            result,
+                            extra={"url": url},
+                        )
+                        return result
+                    except ValueError:
+                        result = None
+
+                dom_text = await page.evaluate(
+                    r"""
+                    () => {
+                      const pick = sel => {
+                        const el = document.querySelector(sel);
+                        return el && el.textContent ? el.textContent : null;
+                      };
+                      const candidates = [
+                        'span.price_value',
+                        '.values_wrapper .price_value',
+                        "[itemprop='offers'] [itemprop='price']",
+                        "[class*='price']",
+                      ];
+                      for (const selector of candidates) {
+                        const value = pick(selector);
+                        if (value && /\d/.test(value)) return value;
+                      }
+                      const meta = document.querySelector('meta[itemprop="price"]');
+                      if (meta && meta.content) return meta.content;
+                      return null;
+                    }
+                    """
+                )
+
+                if isinstance(dom_text, str) and dom_text.strip():
+                    try:
+                        result = to_decimal(dom_text)
+                        LOGGER.info(
+                            "whitehills: price via playwright-dom = %s",
+                            result,
+                            extra={"url": url},
+                        )
+                        return result
+                    except ValueError:
+                        result = None
+        except Exception:
+            result = None
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+
+        LOGGER.info("whitehills: playwright extract returned None", extra={"url": url})
+        return result
 
     # ------------------------------------------------------------------
     def _parse_price_from_soup(
@@ -230,9 +259,9 @@ class WhiteHillsParser(BaseParser):
         if product:
             price = self._price_from_jsonld_product(product)
             if price is not None:
-                LOGGER.info("whitehills: price via jsonld = %s", price)
+                LOGGER.info("whitehills: price via jsonld = %s", price, extra={"url": url})
                 return price
-        price = self._price_from_static_dom(soup)
+        price = self._price_from_static_dom(soup, url=url)
         return price
 
     def _find_jsonld_product(self, soup: BeautifulSoup) -> Optional[dict[str, Any]]:
@@ -262,14 +291,37 @@ class WhiteHillsParser(BaseParser):
             return None
         price_value = offer.get("price")
         if price_value is None:
+            price_value = offer.get("priceValue")
+        if price_value is None:
             return None
         try:
             return to_decimal(str(price_value))
-        except (InvalidOperation, ValueError):
+        except ValueError:
             return None
 
-    def _price_from_static_dom(self, soup: BeautifulSoup) -> Decimal | None:
-        for selector in DOM_SELECTORS:
+    def _price_from_static_dom(self, soup: BeautifulSoup, url: str | None = None) -> Decimal | None:
+        first_pass_selectors = ("span.price_value", ".values_wrapper .price_value")
+        for selector in first_pass_selectors:
+            element = soup.select_one(selector)
+            if element and element.get_text(strip=True):
+                text = element.get_text(" ", strip=True)
+                try:
+                    price = to_decimal(text)
+                except ValueError:
+                    continue
+                LOGGER.info("whitehills: price via dom = %s", price, extra={"url": url})
+                return price
+
+        meta = soup.select_one("meta[itemprop='price']")
+        if meta and meta.get("content"):
+            try:
+                price = to_decimal(meta["content"])
+                LOGGER.info("whitehills: price via dom = %s", price, extra={"url": url})
+                return price
+            except ValueError:
+                pass
+
+        for selector in ("[itemprop='offers'] [itemprop='price']", "[class*='price']"):
             element = soup.select_one(selector)
             if not element:
                 continue
@@ -278,9 +330,9 @@ class WhiteHillsParser(BaseParser):
                 continue
             try:
                 price = to_decimal(text)
-            except (InvalidOperation, ValueError):
+            except ValueError:
                 continue
-            LOGGER.info("whitehills: price via dom = %s", price)
+            LOGGER.info("whitehills: price via dom = %s", price, extra={"url": url})
             return price
         return None
 
