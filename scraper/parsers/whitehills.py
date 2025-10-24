@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import pathlib
+import random
 import re
 import time
 from collections.abc import Iterable
@@ -58,6 +59,62 @@ def _ensure_tmp_dir() -> str:
     return directory
 
 
+def _load_storage_state(path: str) -> dict[str, Any] | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:
+        LOGGER.info("whitehills: failed to load storage_state %s: %s", path, exc)
+    return None
+
+
+def _storage_cookies_for_domain(storage_state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not storage_state:
+        return []
+    cookies = storage_state.get("cookies") if isinstance(storage_state, dict) else None
+    if not isinstance(cookies, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        domain = cookie.get("domain") or ""
+        path = cookie.get("path") or "/"
+        if not domain.endswith("whitehills.ru"):
+            continue
+        if path != "/":
+            continue
+        result.append(cookie)
+    return result
+
+
+def _cookie_header_from_storage(storage_state: dict[str, Any] | None) -> str | None:
+    cookies = _storage_cookies_for_domain(storage_state)
+    pairs: list[str] = []
+    for cookie in cookies:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if name is None or value is None:
+            continue
+        pairs.append(f"{name}={value}")
+    return "; ".join(pairs) if pairs else None
+
+
+def _random_delay_ms() -> int:
+    return random.randint(500, 1200)
+
+
+async def _human_pause(page) -> None:
+    try:
+        await page.wait_for_timeout(_random_delay_ms())
+    except Exception:
+        pass
+
+
 async def _dismiss_overlays(page):
     selectors = [
         "button.cookie-agree",
@@ -73,6 +130,7 @@ async def _dismiss_overlays(page):
             button = page.locator(selector).first
             if await button.is_visible():
                 await button.click(timeout=1000)
+                await _human_pause(page)
         except Exception:
             continue
 
@@ -109,18 +167,48 @@ def _extract_price_from_text(body: str) -> Optional[Decimal]:
     return None
 
 
-def _price_via_cloudscraper(url: str, logger) -> Optional[Decimal]:
+def _log_price_nodes_from_html(html: str, logger) -> None:
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        return
+    texts: list[str] = []
+    for element in soup.select(".price_value"):
+        text = (element.get_text(" ", strip=True) or "").strip()
+        if text:
+            texts.append(text[:60])
+    logger.info("whitehills: .price_value nodes=%s texts=%s", len(texts), texts)
+
+
+def _captcha_detected(text: str) -> bool:
+    lowered = text.lower()
+    if "если вы человек" in lowered:
+        return True
+    if "captcha" in lowered or "капча" in lowered:
+        return True
+    return False
+
+
+def _price_via_cloudscraper(url: str, logger, storage_state: dict[str, Any] | None) -> Optional[Decimal]:
     try:
         scraper = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows", "mobile": False},
             delay=10,
         )
         headers = {"User-Agent": UA_REAL, "Accept-Language": "ru-RU,ru;q=0.9"}
+        cookie_header = _cookie_header_from_storage(storage_state)
+        if cookie_header:
+            headers["Cookie"] = cookie_header
         response = scraper.get(url, headers=headers, timeout=25)
         if response.status_code != 200:
             logger.info("whitehills cloudscraper status=%s", response.status_code)
             return None
         html = response.text or ""
+
+        if _captcha_detected(html):
+            logger.warning("whitehills: captcha detected (cloudscraper)")
+
+        _log_price_nodes_from_html(html, logger)
 
         match = re.search(
             r'<meta[^>]*itemprop=["\']price["\'][^>]*content=["\']([^"\']+)["\']',
@@ -188,85 +276,62 @@ async def _price_from_dom(page, logger) -> Optional[Decimal]:
     await _dismiss_overlays(page)
     try:
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(600)
     except Exception:
         pass
 
+    try:
+        locator = page.locator(".price_value")
+        count = await locator.count()
+        values: list[str] = []
+        for index in range(count):
+            text = (await locator.nth(index).text_content() or "").strip()
+            if text:
+                values.append(text[:60])
+        logger.info("whitehills: dom .price_value nodes=%s texts=%s", count, values)
+    except Exception:
+        logger.info("whitehills: failed to log .price_value nodes")
+
     selectors = [
-        ".values_wrapper .price_value",
         ".price_value",
+        ".values_wrapper .price_value",
         "[itemprop='price']",
-        ".product__price .price_value",
         ".prices_block .price_value",
     ]
-    texts: list[str] = []
-    metas: list[str] = []
+
     for css in selectors:
         try:
             locator = page.locator(css)
             count = await locator.count()
-            if count == 0:
-                continue
-            for index in range(count):
-                element = locator.nth(index)
-                raw = ""
-                if css.startswith("[itemprop='price']"):
-                    raw = (await element.get_attribute("content")) or ""
-                else:
-                    if not await element.is_visible():
-                        continue
-                    raw = (await element.text_content()) or ""
-                raw = raw.strip()
-                if not raw:
-                    continue
-                if css.startswith("[itemprop='price']"):
-                    metas.append(raw)
-                else:
-                    texts.append(raw)
         except Exception:
             continue
-
-    logger.info("whitehills: dom texts=%s metas=%s", [text[:48] for text in texts], metas[:3])
-
-    for sequence in (texts[-1:], texts):
-        for text in sequence:
+        if count == 0:
+            continue
+        if css == "[itemprop='price']":
+            for index in range(count):
+                try:
+                    element = locator.nth(index)
+                    value = (await element.get_attribute("content")) or ""
+                    value = value.strip()
+                    if not value:
+                        continue
+                    return _norm_price(value)
+                except Exception:
+                    continue
+            continue
+        for index in range(count):
             try:
+                element = locator.nth(index)
+                if not await element.is_visible():
+                    continue
+                text = (await element.text_content()) or ""
+                text = text.strip()
+                if not text:
+                    continue
                 return _norm_price(text)
             except Exception:
                 continue
-    for meta_value in metas:
-        try:
-            return _norm_price(meta_value)
-        except Exception:
-            continue
+
     return None
-
-
-async def _price_from_network(page, logger) -> Optional[Decimal]:
-    found: list[Decimal] = []
-
-    async def on_response(resp: Response):
-        try:
-            if resp.request.resource_type not in {"xhr", "fetch"}:
-                return
-            if "whitehills.ru" not in resp.url:
-                return
-            text = await resp.text()
-            price = _extract_price_from_text(text)
-            if price is not None:
-                found.append(price)
-        except Exception:
-            pass
-
-    page.on("response", on_response)
-    try:
-        await page.wait_for_timeout(2000)
-        await page.mouse.wheel(0, 800)
-        await page.wait_for_timeout(800)
-    except Exception:
-        pass
-
-    return found[-1] if found else None
 
 
 def _price_from_jsonld(html_or_texts, logger) -> Decimal | None:
@@ -308,6 +373,27 @@ def _price_from_jsonld(html_or_texts, logger) -> Decimal | None:
     return None
 
 
+async def _dump_debug(page, logger) -> None:
+    if page is None:
+        return
+    try:
+        tmp_dir = _ensure_tmp_dir()
+        timestamp = int(time.time())
+        screenshot_path = os.path.join(tmp_dir, f"whitehills_{timestamp}.png")
+        html_path = os.path.join(tmp_dir, f"whitehills_{timestamp}.html")
+        await page.screenshot(path=screenshot_path, full_page=True)
+        content = await page.content()
+        with open(html_path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        logger.warning(
+            "whitehills: debug dump saved to %s; screenshot=%s",
+            html_path,
+            screenshot_path,
+        )
+    except Exception as exc:
+        logger.warning("whitehills: failed to store debug info: %s", exc)
+
+
 class WhiteHillsParser(BaseParser):
     """Parser for WhiteHills store."""
 
@@ -320,7 +406,9 @@ class WhiteHillsParser(BaseParser):
         return _norm_price(text)
 
     async def fetch_product(self, url: str, *, variant: Optional[str] = None) -> ProductSnapshot:
-        price = _price_via_cloudscraper(url, self.logger)
+        storage_state_data = _load_storage_state(STORAGE_STATE)
+
+        price = _price_via_cloudscraper(url, self.logger, storage_state_data)
         if price is not None:
             self.logger.info("whitehills: price via cloudscraper = %s", price)
             return ProductSnapshot(
@@ -359,6 +447,13 @@ class WhiteHillsParser(BaseParser):
 
         settings_obj = getattr(self, "settings", settings)
 
+        price: Optional[Decimal] = None
+        result_snapshot: Optional[ProductSnapshot] = None
+        page = None
+        context = None
+        browser = None
+        debug_dump_saved = False
+
         try:  # pragma: no cover - requires Playwright
             async with async_playwright() as playwright_ctx:
                 browser = await playwright_ctx.chromium.launch(
@@ -376,22 +471,103 @@ class WhiteHillsParser(BaseParser):
                     ctx_args["storage_state"] = STORAGE_STATE
                     self.logger.info("whitehills: using storage_state %s", STORAGE_STATE)
 
-                context = None
+                context = await browser.new_context(**ctx_args)
+
+                manual_cookies: list[dict[str, Any]] = []
+                for cookie in _storage_cookies_for_domain(storage_state_data):
+                    name = cookie.get("name")
+                    value = cookie.get("value")
+                    if name is None or value is None:
+                        continue
+                    domain = cookie.get("domain") or "whitehills.ru"
+                    if not domain.startswith("."):
+                        domain = f".{domain}"
+                    manual_cookie: dict[str, Any] = {
+                        "name": name,
+                        "value": value,
+                        "domain": domain,
+                        "path": cookie.get("path") or "/",
+                    }
+                    for key in ("expires", "httpOnly", "secure", "sameSite"):
+                        if key in cookie:
+                            manual_cookie[key] = cookie[key]
+                    manual_cookies.append(manual_cookie)
+
+                if manual_cookies:
+                    try:
+                        await context.add_cookies(manual_cookies)
+                        self.logger.info(
+                            "whitehills: added %s cookies to context", len(manual_cookies)
+                        )
+                    except Exception as exc:
+                        self.logger.info("whitehills: failed to add cookies: %s", exc)
+
+                async def route_handler(route, request):
+                    try:
+                        if request.resource_type in {"image", "font"}:
+                            await route.abort()
+                        else:
+                            await route.continue_()
+                    except Exception:
+                        try:
+                            await route.continue_()
+                        except Exception:
+                            pass
+
+                await context.route("**/*", route_handler)
+
+                page = await context.new_page()
+                network_prices: list[Decimal] = []
+
+                async def on_response(resp: Response):
+                    try:
+                        if resp.request.resource_type not in {"xhr", "fetch"}:
+                            return
+                        if "whitehills.ru" not in resp.url:
+                            return
+                        text = await resp.text()
+                        price_candidate = _extract_price_from_text(text)
+                        if price_candidate is not None:
+                            network_prices.append(price_candidate)
+                    except Exception:
+                        pass
+
+                page.on("response", on_response)
+
+                await page.goto("https://whitehills.ru/", wait_until="domcontentloaded", timeout=30000)
+                await _human_pause(page)
+                await _dismiss_overlays(page)
+                await _human_pause(page)
+
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await _human_pause(page)
+                await _dismiss_overlays(page)
+                await _human_pause(page)
+
+                page_content = ""
                 try:
-                    context = await browser.new_context(**ctx_args)
-                    await context.route(
-                        "**/*",
-                        lambda route: route.continue_()
-                        if route.request.resource_type not in {"image", "font"}
-                        else route.abort(),
+                    page_content = await page.content()
+                except Exception:
+                    page_content = ""
+                if page_content and _captcha_detected(page_content):
+                    self.logger.warning("whitehills: captcha detected (playwright)")
+
+                price = await _price_from_dom(page, self.logger)
+                if price is not None:
+                    self.logger.info("whitehills: price via DOM = %s", price)
+                    result_snapshot = ProductSnapshot(
+                        url=url,
+                        price=price,
+                        currency="RUB",
+                        title=None,
+                        variant_key=variant,
+                        payload=None,
                     )
-                    page = await context.new_page()
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-                    price = await _price_from_dom(page, self.logger)
+                elif network_prices:
+                    price = network_prices[-1]
                     if price is not None:
-                        self.logger.info("whitehills: price via DOM = %s", price)
-                        return ProductSnapshot(
+                        self.logger.info("whitehills: price via network = %s", price)
+                        result_snapshot = ProductSnapshot(
                             url=url,
                             price=price,
                             currency="RUB",
@@ -399,20 +575,7 @@ class WhiteHillsParser(BaseParser):
                             variant_key=variant,
                             payload=None,
                         )
-
-                    price = await _price_from_network(page, self.logger)
-                    if price is not None:
-                        self.logger.info("whitehills: price via XHR = %s", price)
-                        return ProductSnapshot(
-                            url=url,
-                            price=price,
-                            currency="RUB",
-                            title=None,
-                            variant_key=variant,
-                            payload=None,
-                        )
-
-                    price = None
+                if result_snapshot is None:
                     try:
                         json_texts = await page.evaluate(
                             """
@@ -423,34 +586,13 @@ class WhiteHillsParser(BaseParser):
                     except Exception:
                         json_texts = []
 
-                    for raw_json in json_texts:
-                        try:
-                            data = json.loads(raw_json)
-                        except Exception:
-                            continue
-                        candidates = data if isinstance(data, list) else [data]
-                        for obj in candidates:
-                            if not isinstance(obj, dict):
-                                continue
-                            offers = obj.get("offers")
-                            if not offers:
-                                continue
-                            offer_list = offers if isinstance(offers, list) else [offers]
-                            for offer in offer_list:
-                                if isinstance(offer, dict) and "price" in offer:
-                                    try:
-                                        price = _norm_price(str(offer["price"]))
-                                        break
-                                    except Exception:
-                                        pass
-                            if price is not None:
-                                break
-                        if price is not None:
-                            break
-
-                    if price is not None:
+                    json_price = _price_from_jsonld(json_texts, self.logger)
+                    if json_price is None and page_content:
+                        json_price = _price_from_jsonld(page_content, self.logger)
+                    if json_price is not None:
+                        price = json_price
                         self.logger.info("whitehills: price via JSON-LD = %s", price)
-                        return ProductSnapshot(
+                        result_snapshot = ProductSnapshot(
                             url=url,
                             price=price,
                             currency="RUB",
@@ -459,27 +601,28 @@ class WhiteHillsParser(BaseParser):
                             payload=None,
                         )
 
-                    try:
-                        tmp_dir = _ensure_tmp_dir()
-                        timestamp = int(time.time())
-                        screenshot_path = os.path.join(tmp_dir, f"whitehills_{timestamp}.png")
-                        html_path = os.path.join(tmp_dir, f"whitehills_{timestamp}.html")
-                        await page.screenshot(path=screenshot_path, full_page=True)
-                        with open(html_path, "w", encoding="utf-8") as handle:
-                            handle.write(await page.content())
-                        self.logger.warning(
-                            "whitehills: debug dump saved to %s; screenshot=%s",
-                            html_path,
-                            screenshot_path,
-                        )
-                    except Exception:
-                        pass
-                finally:
-                    if context is not None:
-                        await context.close()
-                    await browser.close()
+                if result_snapshot is None and page is not None:
+                    await _dump_debug(page, self.logger)
+                    debug_dump_saved = True
         except Exception as exc:  # pragma: no cover - optional dependency or runtime issues
             self.logger.info("whitehills: playwright error: %s", exc)
+            if page is not None and not debug_dump_saved:
+                await _dump_debug(page, self.logger)
+                debug_dump_saved = True
+        finally:
+            try:
+                if context is not None:
+                    await context.close()
+            except Exception:
+                pass
+            try:
+                if browser is not None:
+                    await browser.close()
+            except Exception:
+                pass
+
+        if result_snapshot is not None:
+            return result_snapshot
 
         self.logger.warning("whitehills: price not found")
         raise ScraperError("Price not found on WhiteHills product page")
