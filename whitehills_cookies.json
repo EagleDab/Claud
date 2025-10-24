@@ -1,0 +1,701 @@
+{
+  "cookies": [
+    {
+      "name": "_GRECAPTCHA",
+      "value": "09ADiQh0drZpRmafO6hDM5uPXow-XXZ7Vmc2SLr5gMjomjpFA5q5BQVndk3KInp1GImCGr--kVd-Kcau1xYPcVxlk",
+      "domain": "www.google.com",
+      "path": "/recaptcha",
+      "expires": 1776895674.857978,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "EBfriA",
+      "value": "nGPiAteDRKVwomNgBWxYLEFSyIXkup",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1792879640.091939,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "nGPiAteDRKVwomNgBWxYLEFSyIXkup",
+      "value": "82d46d19c29c248a87f689e63ece4933-1761343646-1761343640",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1761948446,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "PHPSESSID",
+      "value": "0UtPOyIC8Z2aN2QJOFCYITARCK7iUKuP",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ym_debug",
+      "value": "null",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "remixlang",
+      "value": "0",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1793298278.78587,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixstlid",
+      "value": "9071734916853325822_mQsLnPgIBW0vnlN4ZxTsOpAIQz9mY60H6VKQXbVg3HH",
+      "domain": ".vkvideo.ru",
+      "path": "/",
+      "expires": 1792879646.772354,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "prcl",
+      "value": "9cbf96cea179f9",
+      "domain": ".vkvideo.ru",
+      "path": "/",
+      "expires": 1761426446.772377,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixstid",
+      "value": "0_3mnZmDXyiM7vdVeERZugIbPfi1fl0DrWyvyhuS7zZXH",
+      "domain": ".vkvideo.ru",
+      "path": "/",
+      "expires": 1792924070.573499,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixstlid",
+      "value": "9071594179364969788_eplPSPsIzk1ou9qPJLEwFBctli06Yz9ewNbm4k2Phb8",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1792879646.785899,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "prcl",
+      "value": "8211d8fc5f8830",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1761426446.785914,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixstid",
+      "value": "0_3mnZmDXyiM7vdVeERZugIbPfi1fl0DrWyvyhuS7zZXH",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1793475793.604833,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "BITRIX_CONVERSION_CONTEXT_s1",
+      "value": "%7B%22ID%22%3A5%2C%22EXPIRE%22%3A1761425940%2C%22UNIQUE%22%3A%5B%22conversion_visit_day%22%5D%7D",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1792879646.832732,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ym_uid",
+      "value": "1761343647648599871",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1792879646,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ym_d",
+      "value": "1761343647",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1792879646,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "yabs-sid",
+      "value": "865233951761343646",
+      "domain": "mc.yandex.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "i",
+      "value": "BB9ROXOKdHTfswPrROO75Pl7rdlNFtkf8tKSV2vw08bheZakRiyUPjh3nqj3su3JHXLNPlWYHMzSoUk7UcMihuT6qVo=",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1795903646.962271,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "yandexuid",
+      "value": "4658600851761343646",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1795903646.962292,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "yuidss",
+      "value": "4658600851761343646",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1795903646.962303,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ymex",
+      "value": "2076703646.yrts.1761343646#2076703646.yrtsi.1761343646",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1792879646,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1792879680,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "NVID3",
+      "value": "2%7C1306477771%7C9c1ce%7C312944847%7C3a4b2a",
+      "domain": ".eyenewton.ru",
+      "path": "/",
+      "expires": 1795903647.015957,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "roistat_visit",
+      "value": "436684",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1762553247,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "roistat_first_visit",
+      "value": "436684",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1795903647.110075,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "roistat_visit_cookie_expire",
+      "value": "1209600",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1762553247,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "roistat_is_need_listen_requests",
+      "value": "0",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "roistat_is_save_data_in_cookie",
+      "value": "1",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ym_isad",
+      "value": "2",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1761415647,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "n_clb_it",
+      "value": "1761343647",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1761430047,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ym_visorc",
+      "value": "w",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1761345473,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "roistat_cookies_to_resave",
+      "value": "roistat_ab%2Croistat_ab_submit%2Croistat_visit",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "guid",
+      "value": "92BF741668FBF8A3X1761343651",
+      "domain": ".tns-counter.ru",
+      "path": "/",
+      "expires": 1792879651.098564,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "adblock",
+      "value": "0",
+      "domain": ".vkvideo.ru",
+      "path": "/",
+      "expires": 1762553252,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixsts",
+      "value": "%7B%22data%22%3A%5B%5B1761343651%2C%22entries_requests%22%2C1%2C%22ads_light%22%2C%22web%22%5D%2C%5B1761343653%2C%22unique_adblock_users%22%2C0%2C%22web2%22%2C%22false%22%2Cnull%2Cnull%5D%5D%2C%22uniqueId%22%3A25460073.074774265%7D",
+      "domain": ".vkvideo.ru",
+      "path": "/",
+      "expires": 1761344516,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "adblock",
+      "value": "0",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1762553252,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "remixsts",
+      "value": "%7B%22data%22%3A%5B%5B1761343651%2C%22entries_requests%22%2C1%2C%22ads_light%22%2C%22web%22%5D%2C%5B1761343653%2C%22unique_adblock_users%22%2C0%2C%22web2%22%2C%22false%22%2Cnull%2Cnull%5D%5D%2C%22uniqueId%22%3A321035601.7204356%7D",
+      "domain": ".vk.com",
+      "path": "/",
+      "expires": 1761344517,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "___dc",
+      "value": "f2826cc6-5591-4c67-ae34-5d419af4f328",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1795903674.697512,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "NEXT_VIEWED_ITEMS_s1",
+      "value": "%7B%222907%22%3A%5B%221761343672941%22%2C%224926%22%5D%7D",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1763935672,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "EBfriA_hits",
+      "value": "8",
+      "domain": "whitehills.ru",
+      "path": "/",
+      "expires": 1761430079.729756,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "BITRIX_SM_ACCEPT_COOKIE",
+      "value": "Y",
+      "domain": ".whitehills.ru",
+      "path": "/",
+      "expires": 1792447679.730042,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "bh",
+      "value": "EiciTm90X0EgQnJhbmQiO3Y9IjgiLCAiQ2hyb21pdW0iO3Y9IjEyMCIaA3g4NiINMTIwLjAuNjA5OS4yOCoCPzA6CSJXaW5kb3dzIkIGMTkuMC4wSgI2NFI2Ik5vdF9BIEJyYW5kIjt2PSI4LjAuMC4wIiwiQ2hyb21pdW0iO3Y9IjEyMC4wLjYwOTkuMjgiYMHx78cGah7cyuH/CJLYobEDn8/h6gP7+vDnDev//fYPm9rNhwg=",
+      "domain": ".yandex.ru",
+      "path": "/",
+      "expires": 1795903681,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "PVID",
+      "value": "3tCijO2y7ZYZ00002s1jPKoZ:::0-0-0-e165160-0-e165186:CAASEFjv5Zg2S2J86X4P-r6LedkaYPGNf2SiUo4ZcXfr7Wsqab6kvxFEJaUAlxbqkFzwojQ2dUoxT-jZRo08Sw_5mdUvAbhPm9HUQnpHsUwFmimKkrII4Eo3YQEFb33bua9D7MGJwDwmE-VS-lVjIDJMokQLvQ",
+      "domain": "top-fwz1.mail.ru",
+      "path": "/",
+      "expires": 1792966086.402353,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VID",
+      "value": "3tCijO2y7ZYZ00002s1jPKoZ:::0-0-0-e165160-0-e165186:CAASEFjv5Zg2S2J86X4P-r6LedkaYPGNf2SiUo4ZcXfr7Wsqab6kvxFEJaUAlxbqkFzwojQ2dUoxT-jZRo08Sw_5mdUvAbhPm9HUQnpHsUwFmimKkrII4Eo3YQEFb33bua9D7MGJwDwmE-VS-lVjIDJMokQLvQ",
+      "domain": ".mail.ru",
+      "path": "/",
+      "expires": 1792966086.40239,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://whitehills.ru",
+      "localStorage": [
+        {
+          "name": "roistat_isMultiDomain",
+          "value": "1"
+        },
+        {
+          "name": "roistat_multiwidgetWhatsAppLink",
+          "value": "null"
+        },
+        {
+          "name": "jv_history_6Rdudaa1bU",
+          "value": "[{\"url\":\"https://whitehills.ru/\",\"title\":\"Искусственный облицовочный камень для облицовки фасада - купить в Москве от производителя по низким ценам | White Hills\",\"time\":1761343659374},{\"url\":\"https://whitehills.ru/product/muralla-blanco/\",\"title\":\"Керамогранитная плитка Muralla Blanco White Hills - купить в Москве | цена от производителя\",\"time\":1761343674544}]"
+        },
+        {
+          "name": "_ym26812653:0_reqNum",
+          "value": "6"
+        },
+        {
+          "name": "roistat_multiwidgetTelegramLink",
+          "value": "null"
+        },
+        {
+          "name": "roistat_visit",
+          "value": "436684"
+        },
+        {
+          "name": "_ym26812653_lsid",
+          "value": "1365303250413"
+        },
+        {
+          "name": "jv_eBuffer_6Rdudaa1bU",
+          "value": "[]"
+        },
+        {
+          "name": "callback_landing_page_referrer",
+          "value": "direct"
+        },
+        {
+          "name": "roistat_is_need_listen_requests",
+          "value": "0"
+        },
+        {
+          "name": "jv_temp_sess_enter_ts_6Rdudaa1bU",
+          "value": "{\"val\":1761343659373,\"expire\":1761386859373}"
+        },
+        {
+          "name": "roistat_links_markup",
+          "value": "{\"id_ozon\":null,\"id_wildberries\":null}"
+        },
+        {
+          "name": "roistat_multiwidgetViberLink",
+          "value": "null"
+        },
+        {
+          "name": "roistat_settings_saved",
+          "value": "1"
+        },
+        {
+          "name": "___dc",
+          "value": "f2826cc6-5591-4c67-ae34-5d419af4f328"
+        },
+        {
+          "name": "roistat_multiwidgetViberEnabled",
+          "value": "0"
+        },
+        {
+          "name": "roistat_promo_code",
+          "value": "{\"is_enabled\":false}"
+        },
+        {
+          "name": "roistat_geo_data",
+          "value": "{\"is_enabled\":1,\"city\":\"Екатеринбург\",\"country\":\"Россия\",\"region\":\"Свердловская область\"}"
+        },
+        {
+          "name": "jv_temp_sess_invitation_time_6Rdudaa1bU",
+          "value": "{\"val\":1761343680631,\"expire\":1761386880631}"
+        },
+        {
+          "name": "roistat_multiwidgetVKEnabled",
+          "value": "0"
+        },
+        {
+          "name": "roistat_multiwidgetEnabled",
+          "value": "0"
+        },
+        {
+          "name": "callback_landing_page_url",
+          "value": "https://whitehills.ru/product/muralla-blanco/"
+        },
+        {
+          "name": "roistat_multiwidgetWhatsAppEnabled",
+          "value": "0"
+        },
+        {
+          "name": "jv_store_6Rdudaa1bU_client",
+          "value": "{\"captchaToken\":null,\"customData\":null,\"evaluate\":null,\"mailing\":{\"email\":null,\"phone\":null},\"inputText\":\"\",\"isBlacklisted\":null,\"isExist\":false,\"utm\":{\"campaign\":\"(direct)\",\"source\":\"(direct)\",\"medium\":null,\"keyword\":null,\"term\":null,\"content\":null},\"visitorId\":\"db69ac2371d47148\",\"tags\":null,\"attributes\":null,\"externalData\":null,\"assigned_agent_id\":null,\"avatar_url\":null,\"client_id\":null,\"client_info\":{\"client_name\":null,\"description\":null,\"email\":null,\"phone\":null},\"department_id\":null,\"display_name\":null,\"eula_accepted\":null,\"has_integration\":null,\"is_introduced\":null,\"jv_sess_id\":null,\"last_message\":\"\",\"pa_id\":1324731,\"user_token\":\"436684\",\"activeWebRTCCallMessageId\":null,\"webRTCCallStatus\":null,\"cw_call\":{\"error\":null,\"status\":null},\"cw_call_enabled\":null,\"cw_call_delayed_periods\":[],\"cw_call_delayed_status\":null,\"cw_call_delayed_tz\":null,\"cw_call_delayed\":null}"
+        },
+        {
+          "name": "roistat_multiwidgetTelegramEnabled",
+          "value": "0"
+        },
+        {
+          "name": "_grecaptcha",
+          "value": "09ADiQh0dmAA-aJNbo7N3xL4wZb8bdL0QLuTqdX-AxOGx7CdoDgqoEFVrATsgaVbwVWjMSTHpUuxYejws072gw2tFXQMMsIwmGFMV5vnybuWblgxEdslv269Dh21E5Y1q2"
+        },
+        {
+          "name": "roistat_isNeedToListenRequests",
+          "value": "0"
+        },
+        {
+          "name": "_ym_retryReqs",
+          "value": "{}"
+        },
+        {
+          "name": "roistat_leadHunterTargetPagesMap",
+          "value": "[]"
+        },
+        {
+          "name": "roistat_last_settings_update_time",
+          "value": "1761343651082"
+        },
+        {
+          "name": "roistat_leadHunterEnabled",
+          "value": "0"
+        },
+        {
+          "name": "_ym31945766_lastHit",
+          "value": "1761343661888"
+        },
+        {
+          "name": "_ym_synced",
+          "value": "{}"
+        },
+        {
+          "name": "jv_messages_items_6Rdudaa1bU",
+          "value": "[]"
+        },
+        {
+          "name": "roistat_multiwidgetVKLink",
+          "value": "null"
+        },
+        {
+          "name": "abTesting",
+          "value": "[]"
+        },
+        {
+          "name": "roistat_visit_cookie_expire",
+          "value": "1209600"
+        },
+        {
+          "name": "_ym_wv2rf:31945766:0",
+          "value": "1"
+        },
+        {
+          "name": "roistat_externalCountersEnabled",
+          "value": "0"
+        },
+        {
+          "name": "jv_agents_items_6Rdudaa1bU",
+          "value": "[\"f5764694\"]"
+        },
+        {
+          "name": "roistat_onlineChatEnabled",
+          "value": "0"
+        },
+        {
+          "name": "jv_f5764694_6Rdudaa1bU",
+          "value": "{\"body\":{\"state\":\"join\"},\"agent_id\":1324731,\"display_name\":\"Наталья\",\"title\":\"Консультант\",\"avatar_url\":\"2020_05/5ec3bceada818.jpg\"}"
+        },
+        {
+          "name": "_ym_uid",
+          "value": "\"1761343647648599871\""
+        },
+        {
+          "name": "jv_temp_sess_pages_count_6Rdudaa1bU",
+          "value": "{\"val\":2,\"expire\":1761386874584}"
+        },
+        {
+          "name": "jv_sync_6Rdudaa1bU",
+          "value": "{\"actionType\":\"UPDATE_CLIENT_STORE\",\"sourceId\":\"a29ae7ce-bff1-a2d0-28d0-d5f8bc27f136\",\"time\":1761343680955}"
+        },
+        {
+          "name": "jv_store_6Rdudaa1bU_app",
+          "value": "{\"route\":\"chat\",\"is_online\":1,\"is_focused\":false,\"chat_started\":false,\"chat_accepted\":false,\"widget_color\":\"#2F324A\",\"widget_color2\":\"#424867\",\"widget_font_color\":\"light\",\"cap_id\":null,\"forcedOffline\":false,\"callText\":null,\"maintenance\":null,\"eula_accepted\":false,\"width\":false,\"height\":false,\"viReconnectTime\":null,\"lastMsgId\":null,\"lastChatOpened\":null,\"started\":false,\"lastMsgTime\":null,\"didFreezeData\":false,\"lastChatStatus\":null,\"quoteMsgId\":null,\"hiddenByRules\":false}"
+        },
+        {
+          "name": "roistat_multiwidgetSettings",
+          "value": "{\"is_enabled\":false,\"vk\":{\"is_enabled\":false,\"link\":null},\"fb\":{\"is_enabled\":false,\"link\":null},\"telegram\":{\"is_enabled\":false,\"link\":null},\"whats_app\":{\"is_enabled\":false,\"link\":null},\"viber\":{\"is_enabled\":false,\"link\":null}}"
+        },
+        {
+          "name": "jv_hide_reported_6Rdudaa1bU",
+          "value": "true"
+        },
+        {
+          "name": "jv_temp_visits_count_6Rdudaa1bU",
+          "value": "{\"val\":1,\"expire\":1792900611373}"
+        },
+        {
+          "name": "roistat_abTests",
+          "value": ""
+        },
+        {
+          "name": "bx-s1-NEXT_VIEWED_ITEMS_s1",
+          "value": "1763935673:{\"2907\":{\"PRODUCT_ID\":\"2907\",\"IBLOCK_ID\":\"17\",\"NAME\":\"Керамогранитная плитка Muralla Blanco\",\"DETAIL_PAGE_URL\":\"/product/muralla-blanco/\",\"PICTURE_ID\":\"4926\",\"CATALOG_MEASURE_NAME\":\"м2\",\"MIN_PRICE\":{\"UNROUND_BASE_PRICE\":\"4800\",\"UNROUND_PRICE\":\"4800\",\"BASE_PRICE\":\"4800\",\"PRICE\":\"4800\",\"ID\":\"205\",\"PRICE_TYPE_ID\":\"1\",\"CURRENCY\":\"RUB\",\"DISCOUNT\":\"0\",\"PERCENT\":\"0\",\"QUANTITY_FROM\":\"\",\"QUANTITY_TO\":\"\",\"QUANTITY_HASH\":\"ZERO-INF\",\"MEASURE_RATIO_ID\":\"\",\"PRINT_BASE_PRICE\":\"4 800 руб.\",\"RATIO_BASE_PRICE\":\"4800\",\"PRINT_RATIO_BASE_PRICE\":\"4 800 руб.\",\"PRINT_PRICE\":\"4 800 руб.\",\"RATIO_PRICE\":\"4800\",\"PRINT_RATIO_PRICE\":\"4 800 руб.\",\"PRINT_DISCOUNT\":\"0 руб.\",\"RATIO_DISCOUNT\":\"0\",\"PRINT_RATIO_DISCOUNT\":\"0 руб.\",\"MIN_QUANTITY\":\"1\",\"VALUE\":\"4800\",\"PRINT_VALUE\":\"<span class=\\\"price_value\\\">4 800</span><span class=\\\"price_currency\\\"> руб.</span>\",\"DISCOUNT_VALUE\":\"4800\",\"PRINT_DISCOUNT_VALUE\":\"<span class=\\\"price_value\\\">4 800</span><span class=\\\"price_currency\\\"> руб.</span>\"},\"CAN_BUY\":\"Y\",\"IS_OFFER\":\"N\",\"WITH_OFFERS\":\"N\",\"ID\":2907,\"ACTIVE_FROM\":1761343672941,\"IS_LAST\":true}}"
+        },
+        {
+          "name": "roistat_multiwidgetFBLink",
+          "value": "null"
+        },
+        {
+          "name": "jv_loader_info_6Rdudaa1bU",
+          "value": "{\"isChatStarted\":false,\"configHost\":\"//code.jivosite.com\",\"buildNumber\":\"1761043416\",\"bundleLoaded\":true,\"isNewCode\":false,\"log\":false,\"lastStatus\":{\"premium\":true,\"maintenance\":false,\"config_updated_ts\":1740035157,\"agents\":[{\"agent_id\":1324731,\"display_name\":\"Наталья\",\"title\":\"Консультант\",\"avatar_url\":\"2020_05/5ec3bceada818.jpg\"},{\"agent_id\":1328050,\"display_name\":\"Анна\",\"title\":\"Консультант\",\"avatar_url\":\"2020_05/5ec3b416ae92e.jpg\"}]}}"
+        },
+        {
+          "name": "roistat_proxy_forms",
+          "value": "[{\"selector\":\"#newton_callback_submit_button\",\"type\":\"js-button\",\"fields\":[],\"is_need_callback\":false,\"crm\":{\"is_enabled\":true},\"hosts\":[\"whitehills.ru\"],\"is_excluding_hosts\":false,\"lead_name\":\"Обратный звонок (виджет)\",\"name\":{\"required\":false,\"type\":\"plain\",\"value\":\"\"},\"comment\":{\"required\":false,\"type\":\"plain\",\"value\":\"\"},\"email\":{\"required\":false,\"type\":\"plain\",\"value\":\"\"},\"phone\":{\"required\":true,\"type\":\"js\",\"value\":\"return document.getElementById(\\\"CallbackRequestForm_client_phone\\\").value;\"},\"title\":\"Обратный звонок (виджет)\"}]"
+        },
+        {
+          "name": "roistat_onlineChatSettings",
+          "value": "{\"is_available_for_current_user_agent\":true,\"pages_filter\":{\"is_enabled\":false,\"pages\":[]},\"auto_open_chat\":{\"is_enabled\":false,\"delay_in_seconds\":30}}"
+        },
+        {
+          "name": "roistat_isSaveDataInCookie",
+          "value": "1"
+        },
+        {
+          "name": "_ym31945766:0_reqNum",
+          "value": "10"
+        },
+        {
+          "name": "roistat_metrika_counter_id",
+          "value": "31945831,31945766"
+        },
+        {
+          "name": "nvid",
+          "value": "2|1306477771|9c1ce|312944847|3a4b2a"
+        },
+        {
+          "name": "roistat_is_save_data_in_cookie",
+          "value": "1"
+        },
+        {
+          "name": "bx-compositeCache",
+          "value": "1761345113:{\"USER_ID\":\"\",\"SERVER_TIME\":1761343673,\"USER_TZ_OFFSET\":0,\"USER_TZ_AUTO\":\"Y\",\"bitrix_sessid\":\"319561e78fe4755d166c08ce2844787d\"}"
+        },
+        {
+          "name": "roistat_settings_version",
+          "value": "13"
+        },
+        {
+          "name": "roistat_multiwidgetFBEnabled",
+          "value": "0"
+        },
+        {
+          "name": "roistat_first_visit",
+          "value": "436684"
+        },
+        {
+          "name": "_ym31945766_lsid",
+          "value": "1350658314944"
+        }
+      ]
+    }
+  ]
+}

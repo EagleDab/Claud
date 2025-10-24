@@ -38,6 +38,8 @@ services:
       target: bot-playwright
     container_name: price_monitor_bot
     command: python -m bot.main
+    environment:
+      - WHITEHILLS_STORAGE_STATE=/app/whitehills_cookies.json
     env_file:
       - .env
     depends_on:
@@ -48,6 +50,7 @@ services:
     volumes:
       - ./:/app
       - browser_cache:/app/.cache
+      - ./whitehills_cookies.json:/app/whitehills_cookies.json:ro
     restart: unless-stopped
 
   scheduler:
